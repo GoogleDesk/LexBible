@@ -352,7 +352,7 @@ const cb = {
   stats:    { display:'flex', alignItems:'baseline', gap:4 },
   statBig:  { fontFamily:'"Lora", "Lora", Georgia, serif', fontSize:26, fontWeight:700, color:'#1A1714' },
   statSmall:{ fontSize:12.5, color:'#5A4538' },
-  dlBtn:    { padding:'5px 12px', background:'#1A1714', color:'#2A6049', border:'none', borderRadius:5, fontSize:11.5, fontWeight:700, cursor:'pointer', letterSpacing:'.4px' },
+  dlBtn:    { padding:'5px 12px', background:'#1A1714', color:'#FFFFFF', border:'none', borderRadius:5, fontSize:11.5, fontWeight:700, cursor:'pointer', letterSpacing:'.4px' },
   dlBtnAnim:{ opacity:.6 },
   searchWrap:{ padding:'9px 12px', borderBottom:'1px solid #E2D9CC' },
   search:   { width:'100%', boxSizing:'border-box', padding:'7px 10px', borderRadius:6, border:'1px solid #DDD6CC', fontSize:12.5, background:'white', outline:'none' },

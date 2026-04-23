@@ -1,0 +1,22 @@
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local secrets (never commit your Anthropic API key)
+.env
+.env.local
+
+# Node tooling (if you ever add one)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Cloudflare
+.wrangler/

@@ -1,25 +1,78 @@
-# CODING AGENTS: READ THIS FIRST
+# LexBrother
 
-This is a **handoff bundle** from Claude Design (claude.ai/design).
+A personal law school companion. Paste e-textbook content into a per-course workspace, generate rigorous multiple-choice quizzes via the Claude API, and write case briefs that export to a clean Word document.
 
-A user mocked up designs in HTML/CSS/JS using an AI design tool, then exported this bundle so a coding agent can implement the designs for real.
+Single-user, browser-only. All data lives in your browser's `localStorage`. Your Anthropic API key is stored only in your browser and is sent directly to Anthropic — nothing is proxied through a server.
 
-## What you should do — IMPORTANT
+## Features
 
-**Read the chat transcripts first.** There are 2 chat transcript(s) in `chats/`. The transcripts show the full back-and-forth between the user and the design assistant — they tell you **what the user actually wants** and **where they landed** after iterating. Don't skip them. The final HTML files are the output, but the chat is where the intent lives.
+- **Textbook** — paste a raw TOC (or upload a `.docx` / `.pdf`); Claude extracts chapters and cases. Paste each chapter's content to populate its case list.
+- **Quizzes** — generate up to 500 questions per chapter using Claude Opus 4.7. Fact-based, application, or mixed. Focus area field lets you narrow questions to specific pages, a specific case, or a specific concept. Right-side navigation pane, flagging, progress is saved mid-quiz, multiple quiz sets per chapter with automatic overlap avoidance.
+- **Case Briefs** — standard six-field brief template (Facts, Procedural History, Issue, Holding, Reasoning, Rule). Optional "red flag" AI review per field flags major omissions. Export all completed briefs as a plain Times New Roman Word document with standard 1" margins.
 
-**Read `project/LexBrother.html` in full.** The user had this file open when they triggered the handoff, so it's almost certainly the primary design they want built. Read it top to bottom — don't skim. Then **follow its imports**: open every file it pulls in (shared components, CSS, scripts) so you understand how the pieces fit together before you start implementing.
+## Stack
 
-**If anything is ambiguous, ask the user to confirm before you start implementing.** It's much cheaper to clarify scope up front than to build the wrong thing.
+Vanilla React 18 loaded via CDN, JSX compiled in-browser by `@babel/standalone`. No build step. No backend. Data persists in `localStorage` only.
 
-## About the design files
+```
+index.html        # App shell, loads React + Babel + all components
+js/
+  storage.js      # Data layer + Anthropic API calls
+  App.jsx         # Root component
+  Sidebar.jsx     # Course list + API key modal
+  CourseView.jsx  # Tab shell
+  TextbookTab.jsx # TOC + chapter content
+  QuizTab.jsx     # Quiz generation + taking
+  CaseBriefsTab.jsx # Case briefs + Word export
+```
 
-The design medium is **HTML/CSS/JS** — these are prototypes, not production code. Your job is to **recreate them pixel-perfectly** in whatever technology makes sense for the target codebase (React, Vue, native, whatever fits). Match the visual output; don't copy the prototype's internal structure unless it happens to fit.
+## Running locally
 
-**Don't render these files in a browser or take screenshots unless the user asks you to.** Everything you need — dimensions, colors, layout rules — is spelled out in the source. Read the HTML and CSS directly; a screenshot won't tell you anything they don't.
+Because browsers block some features when opening files via `file://`, serve the folder over a local HTTP server:
 
-## Bundle contents
+```bash
+# Python 3
+python3 -m http.server 8080
 
-- `README.md` — this file
-- `chats/` — conversation transcripts (read these!)
-- `project/` — the `LexBrother` project files (HTML prototypes, assets, components)
+# Or: any static server
+npx serve .
+```
+
+Then open http://localhost:8080.
+
+## Deploy to Cloudflare Pages
+
+1. Push this repo to GitHub (instructions below).
+2. Go to **Cloudflare Dashboard → Workers & Pages → Create → Pages → Connect to Git**.
+3. Select the `LexBrother` repo.
+4. On the build config screen, **leave the framework preset as "None"** and **leave the build command empty**. Set the **build output directory** to `/` (the repo root).
+5. Click Save and Deploy.
+
+That's it. Cloudflare will serve `index.html` at the site URL. Every future `git push` to the main branch triggers an auto-deploy.
+
+## Setting up your Anthropic API key
+
+1. Go to https://console.anthropic.com, create an account, add a credit card (minimum $5).
+2. **Settings → API Keys → Create Key.** Copy it (starts with `sk-ant-…`).
+3. In LexBrother, click the **⚙** icon at the bottom-left of the sidebar. Paste your key, hit Save.
+4. The key lives only in your browser's localStorage and is sent directly to Anthropic on every request. It is never stored or logged anywhere else.
+
+Without a key, the app falls back to a built-in quota (rate-limited and capped at 30 questions per quiz). With a key, you get up to 500 questions and full TOC cleanup on Claude Opus 4.7.
+
+## Data backup
+
+All data is in one localStorage key: `lexbrother_v1`. To back up manually:
+
+```js
+// Browser console
+copy(localStorage.getItem('lexbrother_v1'));  // copies full JSON to clipboard
+```
+
+To restore:
+
+```js
+localStorage.setItem('lexbrother_v1', /* paste JSON string */);
+location.reload();
+```
+
+Clearing browser data, using incognito, or switching devices wipes it. A future upgrade path would be to add Supabase or a similar backend for cloud sync.

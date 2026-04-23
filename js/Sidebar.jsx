@@ -221,7 +221,7 @@ const sS = {
   navLabel:{ fontSize:10, fontWeight:700, color:'rgba(26,23,20,0.6)', letterSpacing:'1.8px', textTransform:'uppercase', padding:'8px 22px 4px' },
   separator:{ height:1, background:'rgba(26,23,20,0.1)', margin:'8px 0' },
   item:    { display:'flex', alignItems:'center', width:'100%', padding:'9px 10px 9px 22px', background:'none', border:'none', cursor:'pointer', textAlign:'left', position:'relative', gap:6, transition:'background 0.12s' },
-  itemActive:{ background:'rgba(184,150,46,0.1)' },
+  itemActive:{ background:'rgba(42,96,73,0.12)' },
   activeBar: { position:'absolute', left:0, top:'18%', bottom:'18%', width:3, background:'#2A6049', borderRadius:'0 2px 2px 0' },
   itemText:  { flex:1, minWidth:0 },
   itemName:  { fontSize:12.5, fontWeight:500, lineHeight:1.35 },
@@ -229,10 +229,10 @@ const sS = {
   resetDot:  { width:8, height:8, borderRadius:'50%', background:'#EF4444', border:'none', cursor:'pointer', flexShrink:0, padding:0, opacity:0.85 },
   // Add course
   addCourseForm:   { padding:'8px 14px' },
-  addCourseInput:  { width:'100%', boxSizing:'border-box', padding:'6px 9px', borderRadius:5, border:'1px solid rgba(184,150,46,0.3)', background:'rgba(26,23,20,0.07)', color:'#1A1714', fontSize:12.5, outline:'none', marginBottom:6 },
+  addCourseInput:  { width:'100%', boxSizing:'border-box', padding:'6px 9px', borderRadius:5, border:'1px solid rgba(42,96,73,0.3)', background:'rgba(26,23,20,0.07)', color:'#1A1714', fontSize:12.5, outline:'none', marginBottom:6 },
   addCourseBtn:    { flex:1, padding:'5px 10px', background:'#2A6049', color:'#FFFFFF', border:'none', borderRadius:4, fontSize:12, fontWeight:700, cursor:'pointer' },
   addCourseBtnGhost:{ padding:'5px 8px', background:'none', border:'1px solid rgba(26,23,20,0.15)', borderRadius:4, color:'rgba(26,23,20,0.5)', fontSize:12, cursor:'pointer' },
-  addCourseTrigger:{ width:'100%', padding:'8px 22px', background:'none', border:'none', color:'rgba(184,150,46,0.5)', fontSize:11.5, cursor:'pointer', textAlign:'left', letterSpacing:'0.3px' },
+  addCourseTrigger:{ width:'100%', padding:'8px 22px', background:'none', border:'none', color:'#2A6049', fontWeight:600, fontSize:12, cursor:'pointer', textAlign:'left', letterSpacing:'0.3px' },
   // Footer
   footer:    { padding:'12px 16px 12px 22px', borderTop:'1px solid #D8D0C0', display:'flex', alignItems:'center', gap:8 },
   footerDot: { width:9, height:9, borderRadius:'50%', background:'#2A6049', flexShrink:0 },
@@ -248,7 +248,7 @@ const sS = {
   modalDesc: { fontSize:13.5, color:'#3A3020', lineHeight:1.65, marginBottom:12 },
   modalFoot: { padding:'14px 22px', borderTop:'1px solid #E2D9CC', display:'flex', gap:8, justifyContent:'flex-end' },
   confirmInput:{ width:'100%', boxSizing:'border-box', padding:'9px 12px', borderRadius:6, border:'1.5px solid', fontSize:14, fontFamily:'monospace', background:'white', outline:'none', transition:'border-color .2s' },
-  btnPrimary:{ padding:'9px 20px', background:'#1A1714', color:'#1A1714', border:'none', borderRadius:6, fontSize:13, fontWeight:600, cursor:'pointer' },
+  btnPrimary:{ padding:'9px 20px', background:'#1A1714', color:'#FFFFFF', border:'none', borderRadius:6, fontSize:13, fontWeight:600, cursor:'pointer' },
   btnDanger: { padding:'9px 20px', background:'#C0392B', color:'white', border:'none', borderRadius:6, fontSize:13, fontWeight:600, cursor:'pointer', transition:'opacity .2s' },
   btnGhost:  { padding:'9px 20px', background:'none', color:'#6B5F4A', border:'1px solid #DDD6CC', borderRadius:6, fontSize:13, cursor:'pointer' },
 };
