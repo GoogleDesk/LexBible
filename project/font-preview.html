@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>LexBrother — Font Preview</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=EB+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Crimson+Pro:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet"/>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <style>*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #1a1a1a; }</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+const FONTS = [
+  { id: 'current',    name: 'Current (Playfair + Georgia)', heading: '"Playfair Display", Georgia, serif', body: 'Georgia, serif' },
+  { id: 'tnr',        name: 'Times New Roman',              heading: '"Times New Roman", Times, serif',   body: '"Times New Roman", Times, serif' },
+  { id: 'garamond',   name: 'EB Garamond',                  heading: '"EB Garamond", Georgia, serif',      body: '"EB Garamond", Georgia, serif' },
+  { id: 'lora',       name: 'Lora',                         heading: '"Lora", Georgia, serif',             body: '"Lora", Georgia, serif' },
+  { id: 'baskerville',name: 'Libre Baskerville',            heading: '"Libre Baskerville", Georgia, serif',body: '"Libre Baskerville", Georgia, serif' },
+  { id: 'crimson',    name: 'Crimson Pro',                  heading: '"Crimson Pro", Georgia, serif',      body: '"Crimson Pro", Georgia, serif' },
+];
+
+const BG   = '#F8F6F1';
+const CARD = '#FFFFFF';
+const BDR  = '#E2D9CC';
+const GRN  = '#2A6049';
+const BLK  = '#1A1714';
+const SUB  = '#4A3D30';
+
+function FontCard({ font }) {
+  return (
+    <div style={{ fontFamily: font.body, width: 420, background: BG, borderRadius: 10, border: `1px solid ${BDR}`, overflow:'hidden', boxShadow:'0 4px 20px rgba(0,0,0,0.1)' }}>
+
+      {/* Course header */}
+      <div style={{ padding:'18px 22px 0', borderBottom:`1px solid ${BDR}`, background: BG }}>
+        <div style={{ display:'flex', alignItems:'center', gap:0, marginBottom:12 }}>
+          <span style={{ fontFamily: font.heading, fontSize:22, fontWeight:700, color:BLK }}>Criminal Law</span>
+          <span style={{ display:'inline-block', width:1, height:16, background:BDR, margin:'0 12px 0 10px' }} />
+          <button style={{ padding:'3px 9px', background:'none', border:`1px solid ${BDR}`, borderRadius:4, fontSize:11, color:SUB, cursor:'pointer', marginRight:6, fontFamily:font.body }}>↺ Replace TOC</button>
+          <button style={{ padding:'3px 9px', background:BLK, border:'none', borderRadius:4, fontSize:11, color:'#FFF', cursor:'pointer', fontFamily:font.body }}>+ Add Chapter</button>
+        </div>
+        <div style={{ display:'flex', gap:0 }}>
+          {['Textbook','Quizzes','Case Briefs'].map((t,i) => (
+            <div key={t} style={{ padding:'8px 18px', borderBottom:`2.5px solid ${i===0?GRN:'transparent'}`, fontSize:13.5, color:i===0?BLK:SUB, fontWeight:i===0?700:500, fontFamily:font.body, cursor:'pointer' }}>{t}</div>
+          ))}
+        </div>
+      </div>
+
+      {/* Chapter cards */}
+      <div style={{ padding:16 }}>
+        {[
+          { n:1, title:'Chapter 1: Foundations', meta:'1/1 cases briefed', done:true },
+          { n:2, title:'Chapter 2: The Process for Determining Guilt', meta:'3/8 cases briefed', done:true },
+          { n:3, title:'Chapter 3: Defining Criminal Conduct', meta:'No content yet', done:false },
+        ].map(ch => (
+          <div key={ch.n} style={{ background:CARD, border:`1px solid ${BDR}`, borderRadius:7, marginBottom:6, padding:'12px 14px', display:'flex', alignItems:'center', gap:12 }}>
+            <div style={{ width:26, height:26, borderRadius:'50%', background:GRN, color:'#FFF', display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, flexShrink:0 }}>{ch.n}</div>
+            <div>
+              <div style={{ fontFamily:font.heading, fontSize:14.5, fontWeight:700, color:BLK, lineHeight:1.3 }}>{ch.title}</div>
+              <div style={{ fontSize:12, marginTop:3, color:ch.done?GRN:'#9A7030', fontWeight:500, fontFamily:font.body }}>{ch.meta}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Quiz question snippet */}
+      <div style={{ margin:'0 16px 16px', background:CARD, border:`1px solid ${BDR}`, borderRadius:7, padding:'14px 16px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <button style={{ padding:'4px 10px', background:CARD, border:`1px solid ${BDR}`, borderRadius:4, fontSize:12, fontFamily:font.body, color:BLK, cursor:'pointer' }}>← Prev</button>
+            <span style={{ fontSize:13, fontWeight:700, color:BLK, fontFamily:font.body }}>Q1 <span style={{opacity:0.5, fontWeight:400}}>of 20</span></span>
+            <span style={{ fontSize:11.5, fontWeight:600, padding:'2px 8px', borderRadius:4, background:'#E6F4F0', color:GRN, fontFamily:font.body }}>Application</span>
+          </div>
+          <button style={{ padding:'4px 10px', background:BLK, border:'none', borderRadius:4, fontSize:12, fontFamily:font.body, color:'#FFF', cursor:'pointer' }}>Next →</button>
+        </div>
+        <div style={{ fontSize:15, color:BLK, lineHeight:1.7, marginBottom:12, fontFamily:font.heading, fontWeight:400 }}>
+          A plaintiff files a federal civil complaint. At what procedural stage should the defendant challenge legal sufficiency?
+        </div>
+        {['Motion to dismiss under Rule 12(b)(6)', 'Summary judgment after discovery', 'Directed verdict at trial'].map((txt,i) => (
+          <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 10px', borderRadius:6, border:`1.5px solid ${i===0?GRN:BDR}`, background:i===0?'#EDF4F0':CARD, marginBottom:6 }}>
+            <div style={{ width:24, height:24, borderRadius:'50%', background:i===0?GRN:BLK, color:'#FFF', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:11, flexShrink:0 }}>{['A','B','C'][i]}</div>
+            <span style={{ fontSize:13, color:i===0?GRN:i===2?'rgba(26,23,20,0.4)':BLK, fontFamily:font.body, lineHeight:1.45, fontWeight:i===0?600:400 }}>{txt}</span>
+          </div>
+        ))}
+        <div style={{ marginTop:10, padding:'10px 12px', borderRadius:6, border:`1px solid ${GRN}`, background:'#EDF4F0' }}>
+          <div style={{ fontSize:13, fontWeight:700, color:GRN, marginBottom:4, fontFamily:font.body }}>✓ Correct</div>
+          <div style={{ fontSize:12.5, color:BLK, lineHeight:1.6, fontFamily:font.body }}>A motion to dismiss under Rule 12(b)(6) challenges the legal sufficiency of the complaint before any discovery.</div>
+        </div>
+      </div>
+
+      {/* Case brief snippet */}
+      <div style={{ margin:'0 16px 16px', background:CARD, border:`1px solid ${BDR}`, borderRadius:7, padding:'14px 16px' }}>
+        <div style={{ fontSize:10, fontWeight:700, color:GRN, textTransform:'uppercase', letterSpacing:'0.7px', marginBottom:6, fontFamily:font.body }}>Issue</div>
+        <div style={{ fontSize:13.5, color:BLK, lineHeight:1.65, fontFamily:font.body }}>Whether the court had personal jurisdiction over a non-resident defendant based solely on property ownership within the state.</div>
+      </div>
+
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <DesignCanvas title="LexBrother — Font Options">
+      <DCSection id="fonts" title="Font Comparison — same layout, different typefaces">
+        {FONTS.map(f => (
+          <DCArtboard key={f.id} id={f.id} label={f.name} width={420} height={660}>
+            <div style={{ padding:20, background:'#EEEBE4', height:'100%' }}>
+              <FontCard font={f} />
+            </div>
+          </DCArtboard>
+        ))}
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
