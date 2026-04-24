@@ -5,11 +5,40 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{"sidebarWidth":"232","accentColor":"#2
 
 function App() {
   const [data,         setData]         = useAppState(() => window.LexStore.loadData());
+  const [ready,        setReady]        = useAppState(false);
+  const [cloudStatus,  setCloudStatus]  = useAppState(window.LexStore.isCloudConfigured() ? 'Connecting cloud…' : 'Cloud sync off');
   const [activeCourse, setActiveCourse] = useAppState('civil-procedure');
   const [tweaksOn,     setTweaksOn]     = useAppState(false);
   const [tweaks,       setTweaks]       = useAppState(TWEAK_DEFAULTS);
 
-  useAppEffect(() => { window.LexStore.saveData(data); }, [data]);
+  useAppEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const init = await window.LexStore.initializeData();
+      if (cancelled) return;
+      setData(init.data);
+      if (window.LexStore.isCloudConfigured()) {
+        setCloudStatus(init.error ? `Cloud warning: ${init.error}` : 'Cloud sync on');
+      } else {
+        setCloudStatus('Cloud sync off');
+      }
+      setReady(true);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useAppEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const result = await window.LexStore.persistData(data);
+      if (cancelled) return;
+      if (result.cloud === 'ok') setCloudStatus('Cloud sync on');
+      else if (result.cloud === 'error') setCloudStatus(`Cloud warning: ${result.error}`);
+      else setCloudStatus('Cloud sync off');
+    }, 450);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [data, ready]);
 
   useAppEffect(() => {
     const handler = e => {
@@ -68,6 +97,14 @@ function App() {
     window.parent.postMessage({ type: '__edit_mode_set_keys', edits: next }, '*');
   }
 
+  async function handleCloudConfigSaved() {
+    setCloudStatus('Connecting cloud…');
+    const init = await window.LexStore.initializeData();
+    setData(init.data);
+    setCloudStatus(init.error ? `Cloud warning: ${init.error}` : 'Cloud sync on');
+    setReady(true);
+  }
+
   const defaultCourses = window.LexStore.DEFAULT_COURSES.map(c => ({
     ...c, ...(data.courses[c.id] || {}),
   }));
@@ -88,6 +125,8 @@ function App() {
         onResetCourse={resetCourse}
         onAddCourse={addCourse}
         onDeleteCourse={deleteCourse}
+        cloudStatus={cloudStatus}
+        onCloudConfigSaved={handleCloudConfigSaved}
       />
 
       {activeCourseData && (
