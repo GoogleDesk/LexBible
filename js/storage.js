@@ -1,6 +1,6 @@
-// LexBrother — Data Layer v3
-const STORAGE_KEY = 'lexbrother_v1';
-const APIKEY_KEY  = 'lexbrother_apikey';
+// LexBrother — Data Layer v4 (Supabase-backed, in-memory cache + debounced sync)
+const STORAGE_KEY = 'lexbrother_v1';     // legacy localStorage key — migrated to cloud on first sign-in
+const APIKEY_KEY  = 'lexbrother_apikey'; // legacy localStorage key — migrated to cloud on first sign-in
 
 const DEFAULT_COURSES = [
   { id: 'civil-procedure',        name: 'Civil Procedure',         abbr: 'CivPro'  },
@@ -20,63 +20,150 @@ function freshCourse(c) {
   return { ...c, chapters: [], quizzes: {}, briefs: {} };
 }
 
-function loadData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const data = JSON.parse(raw);
+// ── Cloud state (populated by initCloud after sign-in) ────────────────────────
+const cloud = {
+  client:    null,   // Supabase client
+  userId:    null,   // signed-in user's UUID
+  data:      null,   // cached courses blob
+  apiKey:    '',     // cached Anthropic key
+  saveTimer: null,   // debounce timer id
+  saving:    false,  // true while an upsert is in flight
+  pending:   false,  // true if a save was requested during an in-flight upsert
+};
 
-      // Ensure customCourses array exists
-      if (!data.customCourses) data.customCourses = [];
+// Normalize an arbitrary data object into current shape + run legacy migrations.
+// Runs for data from Supabase, localStorage, or a fresh empty object.
+function normalizeData(raw) {
+  const data = (raw && typeof raw === 'object') ? raw : {};
+  if (!data.courses) data.courses = {};
+  if (!data.customCourses) data.customCourses = [];
 
-      // Ensure all default courses exist
-      DEFAULT_COURSES.forEach(c => {
-        if (!data.courses[c.id]) data.courses[c.id] = freshCourse(c);
-      });
+  // Ensure all default courses exist
+  DEFAULT_COURSES.forEach(c => {
+    if (!data.courses[c.id]) data.courses[c.id] = freshCourse(c);
+  });
 
-      // ── Migration: convert old single-quiz format → sets format ──────────
-      Object.values(data.courses).forEach(course => {
-        if (!course.quizzes) { course.quizzes = {}; return; }
-        Object.keys(course.quizzes).forEach(chId => {
-          const q = course.quizzes[chId];
-          if (q && !q.sets) {
-            // Old format had questions/wrongBank/flagged/sessions at top level
-            course.quizzes[chId] = {
-              sets: q.questions ? [{
-                id: genId(), label: 'Quiz 1',
-                questions:   q.questions || [],
-                settings:    q.settings  || { count: (q.questions||[]).length, type: 'mix' },
-                generatedAt: q.generatedAt || Date.now(),
-                summary:     null,
-                progress:    null,
-                wrongBank:   q.wrongBank || {},
-                flagged:     q.flagged   || [],
-                sessions:    q.sessions  || [],
-              }] : [],
-            };
-          }
-        });
-      });
+  // Legacy migration: convert old single-quiz format → sets format
+  Object.values(data.courses).forEach(course => {
+    if (!course.quizzes) { course.quizzes = {}; return; }
+    Object.keys(course.quizzes).forEach(chId => {
+      const q = course.quizzes[chId];
+      if (q && !q.sets) {
+        course.quizzes[chId] = {
+          sets: q.questions ? [{
+            id: genId(), label: 'Quiz 1',
+            questions:   q.questions || [],
+            settings:    q.settings  || { count: (q.questions||[]).length, type: 'mix' },
+            generatedAt: q.generatedAt || Date.now(),
+            summary:     null,
+            progress:    null,
+            wrongBank:   q.wrongBank || {},
+            flagged:     q.flagged   || [],
+            sessions:    q.sessions  || [],
+          }] : [],
+        };
+      }
+    });
+  });
 
-      return data;
-    }
-  } catch(e) { console.warn('LexBrother: load error', e); }
+  return data;
+}
 
+function emptyData() {
   const data = { courses: {}, customCourses: [] };
   DEFAULT_COURSES.forEach(c => { data.courses[c.id] = freshCourse(c); });
   return data;
 }
 
-function saveData(data) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
-  catch(e) { console.warn('LexBrother: save error', e); }
+// Initialize cloud sync after sign-in. Fetches the user's row from Supabase,
+// or creates it (migrating any local data up on first sign-in).
+async function initCloud(client, userId) {
+  cloud.client = client;
+  cloud.userId = userId;
+
+  const { data: row, error } = await client
+    .from('user_data')
+    .select('data, api_key')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) throw new Error(`Could not load your data: ${error.message}`);
+
+  if (row) {
+    cloud.data   = normalizeData(row.data);
+    cloud.apiKey = row.api_key || '';
+    return;
+  }
+
+  // First sign-in on this account — migrate localStorage if any, else start fresh.
+  let seedData   = null;
+  let seedApiKey = '';
+  try {
+    const rawLocal = localStorage.getItem(STORAGE_KEY);
+    if (rawLocal) seedData = JSON.parse(rawLocal);
+    seedApiKey = localStorage.getItem(APIKEY_KEY) || '';
+  } catch(e) { /* ignore corrupt legacy data */ }
+
+  cloud.data   = normalizeData(seedData || emptyData());
+  cloud.apiKey = seedApiKey;
+
+  const { error: insertErr } = await client.from('user_data').insert({
+    user_id: userId, data: cloud.data, api_key: cloud.apiKey,
+  });
+  if (insertErr) throw new Error(`Could not create your cloud record: ${insertErr.message}`);
 }
 
-// ── API Key ───────────────────────────────────────────────────────────────────
-function loadApiKey() { return localStorage.getItem(APIKEY_KEY) || ''; }
+// Actually push the current cache to Supabase.
+async function flushSave() {
+  if (!cloud.client || !cloud.userId) return;
+  if (cloud.saving) { cloud.pending = true; return; }
+  cloud.saving = true;
+  try {
+    const { error } = await cloud.client
+      .from('user_data')
+      .update({ data: cloud.data, api_key: cloud.apiKey, updated_at: new Date().toISOString() })
+      .eq('user_id', cloud.userId);
+    if (error) console.warn('LexBrother: cloud save error', error);
+  } finally {
+    cloud.saving = false;
+    if (cloud.pending) { cloud.pending = false; scheduleSave(); }
+  }
+}
+
+function scheduleSave() {
+  if (cloud.saveTimer) clearTimeout(cloud.saveTimer);
+  cloud.saveTimer = setTimeout(() => { cloud.saveTimer = null; flushSave(); }, 800);
+}
+
+// Synchronous-ish façade the rest of the app already uses.
+function loadData() {
+  return cloud.data || emptyData();
+}
+
+function saveData(data) {
+  cloud.data = data;
+  scheduleSave();
+}
+
+// Best-effort flush (e.g. before page unload or sign-out).
+async function flushPendingSave() {
+  if (cloud.saveTimer) { clearTimeout(cloud.saveTimer); cloud.saveTimer = null; }
+  await flushSave();
+}
+
+function clearCloud() {
+  if (cloud.saveTimer) { clearTimeout(cloud.saveTimer); cloud.saveTimer = null; }
+  cloud.client = null;
+  cloud.userId = null;
+  cloud.data   = null;
+  cloud.apiKey = '';
+}
+
+// ── API Key (cached in the same cloud row) ────────────────────────────────────
+function loadApiKey() { return cloud.apiKey || ''; }
 function saveApiKey(key) {
-  if (key) localStorage.setItem(APIKEY_KEY, key.trim());
-  else localStorage.removeItem(APIKEY_KEY);
+  cloud.apiKey = (key || '').trim();
+  scheduleSave();
 }
 
 // ── Anthropic direct call ─────────────────────────────────────────────────────
@@ -569,6 +656,7 @@ window.LexStore = {
   DEFAULT_COURSES,
   loadData, saveData,
   loadApiKey, saveApiKey,
+  initCloud, clearCloud, flushPendingSave,
   callClaude, callAnthropicAPI, callBuiltIn,
   parseTOC, basicCleanTOC, basicCleanContent,
   aiCleanTOC,

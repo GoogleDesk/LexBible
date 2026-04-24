@@ -70,10 +70,17 @@
     crossorigin="anonymous"
   ></script>
 
+  <!-- Supabase JS SDK (cloud storage + auth) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+
+  <!-- Cloud config — edit js/config.js with your Supabase URL and anon key -->
+  <script src="js/config.js"></script>
+
   <!-- Data layer (plain JS — no Babel needed) -->
   <script src="js/storage.js"></script>
 
   <!-- Components (each gets its own Babel scope; exports to window) -->
+  <script type="text/babel" src="js/AuthScreen.jsx"></script>
   <script type="text/babel" src="js/Sidebar.jsx"></script>
   <script type="text/babel" src="js/TextbookTab.jsx"></script>
   <script type="text/babel" src="js/QuizTab.jsx"></script>
