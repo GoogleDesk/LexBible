@@ -437,6 +437,110 @@ ${['A','B','C','D'].map(l => `<p style="${tnr}font-size:11pt;margin:2pt 0;${l ==
 ${body}</body></html>`;
 }
 
+// ── Brief Import: file reading + AI extraction ────────────────────────────────
+function ensureMammoth() {
+  if (window.mammoth) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/mammoth@1.8.0/mammoth.browser.min.js';
+    s.onload  = () => resolve();
+    s.onerror = () => reject(new Error('Could not load the Word-doc parser. Check your connection.'));
+    document.head.appendChild(s);
+  });
+}
+
+async function readBriefFile(file) {
+  if (!file) throw new Error('No file selected.');
+  const name = (file.name || '').toLowerCase();
+
+  if (name.endsWith('.docx')) {
+    await ensureMammoth();
+    const buf = await file.arrayBuffer();
+    const { value } = await window.mammoth.extractRawText({ arrayBuffer: buf });
+    return (value || '').trim();
+  }
+
+  const text = await file.text();
+
+  // LexBrother exports .doc as Word-HTML, so detect and strip
+  if (name.endsWith('.doc') || /<html|<body|<p[\s>]/i.test(text)) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = text;
+    tmp.querySelectorAll('p,h1,h2,h3,h4,h5,h6,div,br,li').forEach(el => {
+      el.insertAdjacentText('afterend', '\n');
+    });
+    return (tmp.textContent || tmp.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  return text.trim();
+}
+
+async function extractBriefsFromText(rawText) {
+  const clipped = (rawText || '').slice(0, 120000);
+  if (!clipped.trim()) throw new Error('The document is empty.');
+
+  const prompt =
+`You are extracting case briefs from a law student's document. The document contains ONE OR MORE case briefs, each typically starting with the case name (e.g. "Pennoyer v. Neff") followed by labeled sections the student wrote.
+
+Extract every case as a JSON object with EXACTLY these keys:
+- caseName (string, required)
+- facts (string or null)
+- proceduralHistory (string or null)
+- issue (string or null)
+- holding (string or null)
+- reasoning (string or null)
+
+LABEL MATCHING — fuzzy. Accept typos and variations:
+- "Facts", "Fact Pattern", "Factual Background", "F:", "Facts of the Case" → facts
+- "Procedural History", "Proc. History", "Proceduarl History", "PH", "Procedure" → proceduralHistory
+- "Issue", "Issues", "Legal Issue", "Question Presented", "I:" → issue
+- "Holding", "Rule", "Disposition", "Holding/Rule", "Holding & Rule", "Rule of Law", "H:" → holding
+  (If BOTH "Holding" and a separate "Rule/Disposition" section exist for the same case, CONCATENATE them into the holding field with a blank line between.)
+- "Reasoning", "Rationale", "Analysis", "Court's Reasoning", "R:" → reasoning
+
+CRITICAL RULES:
+1. If a section is absent in the source for a given case, return null for that field. NEVER invent content.
+2. Preserve the student's original wording verbatim. Do NOT summarize, paraphrase, or rewrite.
+3. Do NOT include the label itself in the extracted content. (If the source reads "Facts: The plaintiff sued...", return only "The plaintiff sued...".)
+4. Trim leading/trailing whitespace per field.
+5. Preserve the case name exactly as written, but strip leading numbering like "1." or "Case 3:" or "Brief #2 –".
+6. Case names commonly follow patterns: "X v. Y", "In re X", "People v. X", "State v. X", "United States v. X", "Commonwealth v. X", "Regina v. X", "Ex parte X". Identify them as case boundaries.
+
+Return ONLY a valid JSON array — no markdown fences, no commentary:
+[{"caseName":"...","facts":"...","proceduralHistory":null,"issue":"...","holding":"...","reasoning":"..."}]
+
+Document:
+${clipped}`;
+
+  const text  = await callClaude(prompt, 16000);
+  const match = text.match(/\[[\s\S]*\]/);
+  if (!match) throw new Error('Could not parse the AI response. Try again.');
+
+  let parsed;
+  try { parsed = JSON.parse(match[0]); }
+  catch(e) {
+    const lastBrace = match[0].lastIndexOf('}');
+    try { parsed = JSON.parse(match[0].slice(0, lastBrace + 1) + ']'); }
+    catch(e2) { throw new Error('AI returned malformed JSON. Try again.'); }
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error('No case briefs were found in the document.');
+  }
+
+  const clean = s => (typeof s === 'string' && s.trim()) ? s.trim() : null;
+  return parsed
+    .map(p => ({
+      caseName:          (p.caseName || '').trim(),
+      facts:             clean(p.facts),
+      proceduralHistory: clean(p.proceduralHistory),
+      issue:             clean(p.issue),
+      holding:           clean(p.holding),
+      reasoning:         clean(p.reasoning),
+    }))
+    .filter(p => p.caseName);
+}
+
 // ── Red Flag Review ───────────────────────────────────────────────────────────
 async function generateRedFlagReview({ caseName, fieldLabel, fieldContent }) {
   const prompt =
@@ -473,6 +577,8 @@ window.LexStore = {
   generateBriefsHTML,
   generateMissReportHTML,
   generateRedFlagReview,
+  readBriefFile,
+  extractBriefsFromText,
   qKey,
   genId,
 };
