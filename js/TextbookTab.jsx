@@ -529,7 +529,7 @@ function ContentModal({ chapter, value, onChange, onSubmit, onClose, busy, statu
 // ── Tiny helpers ──────────────────────────────────────────────────────────────
 
 function emptyBrief(chId) {
-  return { chapter: chId, facts: '', proceduralHistory: '', issue: '', holding: '', reasoning: '', rule: '' };
+  return { chapter: chId, facts: '', proceduralHistory: '', issue: '', holding: '', reasoning: '' };
 }
 
 const tbS = {

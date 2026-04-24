@@ -356,19 +356,18 @@ function generateBriefsHTML(course) {
   const tnr      = "font-family:'Times New Roman',Times,serif;";
 
   const fields = [
-    { key: 'facts',             label: 'FACTS'                },
-    { key: 'proceduralHistory', label: 'PROCEDURAL HISTORY'   },
-    { key: 'issue',             label: 'ISSUE'                },
-    { key: 'holding',           label: 'HOLDING'              },
-    { key: 'reasoning',         label: 'REASONING / RATIONALE'},
-    { key: 'rule',              label: 'RULE / DISPOSITION'   },
+    { key: 'facts',             label: 'FACTS'              },
+    { key: 'proceduralHistory', label: 'PROCEDURAL HISTORY' },
+    { key: 'issue',             label: 'ISSUE'              },
+    { key: 'holding',           label: 'HOLDING/RULE'       },
+    { key: 'reasoning',         label: 'REASONING'          },
   ];
 
   let body = '';
   chapters.forEach(ch => {
     const cases = (ch.cases || []).filter(c => {
       const b = briefs[c];
-      return b && (b.facts || b.holding || b.issue || b.reasoning || b.rule);
+      return b && (b.facts || b.holding || b.issue || b.reasoning);
     });
     if (!cases.length) return;
 
@@ -454,9 +453,8 @@ Focus area for "${fieldLabel}":
 - Facts: were the legally dispositive facts included? Any critical facts that drove the outcome missing?
 - Procedural History: is the court level and how the case arrived there clear?
 - Issue: is there a precise, answerable legal question?
-- Holding: is the ruling specific and clear as to what was actually decided?
+- Holding/Rule: is the ruling specific and clear as to what was actually decided, AND is the governing rule or legal principle the case stands for stated?
 - Reasoning: is the core legal logic (not every detail) present?
-- Rule/Disposition: is the governing rule or standard stated?
 
 Respond in 1–4 bullet points max. Only flag things that genuinely matter for understanding or exam prep. If nothing major is missing, say so in one sentence. No praise, no summary — just gaps. 150 words absolute maximum.`;
 

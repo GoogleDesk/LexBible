@@ -10,9 +10,8 @@ const BRIEF_FIELDS = [
   { key: 'facts',             label: 'Facts',               placeholder: 'Describe the key facts relevant to the legal issue…'          },
   { key: 'proceduralHistory', label: 'Procedural History',  placeholder: 'How did the case reach this court?…'                          },
   { key: 'issue',             label: 'Issue',               placeholder: 'What is the precise legal question before the court?…'         },
-  { key: 'holding',           label: 'Holding',             placeholder: "State the court's ruling on the issue…"                       },
-  { key: 'reasoning',         label: 'Reasoning / Rationale',placeholder: "Explain the court's legal reasoning and analysis…"           },
-  { key: 'rule',              label: 'Rule / Disposition',  placeholder: 'What legal rule or principle does this case establish?…'       },
+  { key: 'holding',           label: 'Holding/Rule',        placeholder: "State the court's ruling and the legal rule or principle it establishes…" },
+  { key: 'reasoning',         label: 'Reasoning',           placeholder: "Explain the court's legal reasoning and analysis…"            },
 ];
 
 function CaseBriefsTab({ course, onUpdate, initialCase, onClearInitialCase }) {
@@ -93,7 +92,7 @@ function CaseBriefsTab({ course, onUpdate, initialCase, onClearInitialCase }) {
     );
     const updatedBriefs = {
       ...briefs,
-      [name]: { chapter: chId, facts:'', proceduralHistory:'', issue:'', holding:'', reasoning:'', rule:'' },
+      [name]: { chapter: chId, facts:'', proceduralHistory:'', issue:'', holding:'', reasoning:'' },
     };
     onUpdate({ chapters: updatedChapters, briefs: updatedBriefs });
     setNewCaseName(''); setNewCaseChapter('');
