@@ -87,7 +87,7 @@ const cvS = {
   tabs:  { display: 'flex', gap: 0, alignSelf: 'flex-end' },
   tab: {
     padding: '11px 24px',
-    background: 'none', border: 'none', outline: 'none',
+    background: 'none', border: 'none',
     borderBottom: '2.5px solid transparent',
     cursor: 'pointer', fontSize: 14,
     color: '#5A4A35', fontWeight: 500,
@@ -96,7 +96,7 @@ const cvS = {
   },
   tabActive: {
     color: '#1A1714',
-    borderBottomColor: '#2A6049',
+    borderBottom: '2.5px solid #2A6049',
     fontWeight: 700,
   },
   body: { flex: 1, overflow: 'hidden', display: 'flex' },
