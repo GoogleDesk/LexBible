@@ -1,6 +1,8 @@
 // LexBrother — Data Layer v3
 const STORAGE_KEY = 'lexbrother_v1';
 const APIKEY_KEY  = 'lexbrother_apikey';
+const CLOUDCFG_KEY = 'lexbrother_cloudcfg_v1';
+const CLOUD_TABLE  = 'lexbrother_data';
 
 const DEFAULT_COURSES = [
   { id: 'civil-procedure',        name: 'Civil Procedure',         abbr: 'CivPro'  },
@@ -18,6 +20,15 @@ function genId() {
 
 function freshCourse(c) {
   return { ...c, chapters: [], quizzes: {}, briefs: {} };
+}
+
+function stampData(data) {
+  return { ...data, _meta: { ...(data._meta || {}), updatedAt: Date.now() } };
+}
+
+function ensureMeta(data) {
+  if (data?._meta?.updatedAt) return data;
+  return { ...data, _meta: { ...(data._meta || {}), updatedAt: Date.now() } };
 }
 
 function loadData() {
@@ -58,18 +69,124 @@ function loadData() {
         });
       });
 
-      return data;
+      return ensureMeta(data);
     }
   } catch(e) { console.warn('LexBrother: load error', e); }
 
-  const data = { courses: {}, customCourses: [] };
+  const data = { courses: {}, customCourses: [], _meta: { updatedAt: Date.now() } };
   DEFAULT_COURSES.forEach(c => { data.courses[c.id] = freshCourse(c); });
   return data;
 }
 
 function saveData(data) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+  const stamped = stampData(data);
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(stamped)); }
   catch(e) { console.warn('LexBrother: save error', e); }
+  return stamped;
+}
+
+function loadCloudConfig() {
+  try {
+    const raw = localStorage.getItem(CLOUDCFG_KEY);
+    if (!raw) return { url: '', anonKey: '', syncId: '' };
+    const cfg = JSON.parse(raw);
+    return {
+      url: (cfg.url || '').trim().replace(/\/+$/, ''),
+      anonKey: (cfg.anonKey || '').trim(),
+      syncId: (cfg.syncId || '').trim(),
+    };
+  } catch (e) {
+    console.warn('LexBrother: cloud config load error', e);
+    return { url: '', anonKey: '', syncId: '' };
+  }
+}
+
+function saveCloudConfig(config) {
+  const cleaned = {
+    url: (config?.url || '').trim().replace(/\/+$/, ''),
+    anonKey: (config?.anonKey || '').trim(),
+    syncId: (config?.syncId || '').trim(),
+  };
+  localStorage.setItem(CLOUDCFG_KEY, JSON.stringify(cleaned));
+  return cleaned;
+}
+
+function isCloudConfigured() {
+  const c = loadCloudConfig();
+  return !!(c.url && c.anonKey && c.syncId);
+}
+
+async function loadCloudData() {
+  const cfg = loadCloudConfig();
+  if (!isCloudConfigured()) return null;
+  const url = `${cfg.url}/rest/v1/${CLOUD_TABLE}?sync_id=eq.${encodeURIComponent(cfg.syncId)}&select=payload`;
+  const res = await fetch(url, {
+    headers: {
+      apikey: cfg.anonKey,
+      Authorization: `Bearer ${cfg.anonKey}`,
+      Accept: 'application/json',
+    },
+  });
+  if (!res.ok) throw new Error(`Cloud load failed (${res.status})`);
+  const rows = await res.json();
+  if (!rows?.length || !rows[0]?.payload) return null;
+  return rows[0].payload;
+}
+
+async function saveCloudData(data) {
+  const cfg = loadCloudConfig();
+  if (!isCloudConfigured()) return { ok: false, skipped: true };
+  const stamped = stampData(data);
+  const url = `${cfg.url}/rest/v1/${CLOUD_TABLE}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      apikey: cfg.anonKey,
+      Authorization: `Bearer ${cfg.anonKey}`,
+      'content-type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=minimal',
+    },
+    body: JSON.stringify([{
+      sync_id: cfg.syncId,
+      payload: stamped,
+      updated_at: new Date(stamped._meta.updatedAt).toISOString(),
+    }]),
+  });
+  if (!res.ok) throw new Error(`Cloud save failed (${res.status})`);
+  return { ok: true };
+}
+
+async function initializeData() {
+  const local = loadData();
+  if (!isCloudConfigured()) return { data: local, source: 'local' };
+  try {
+    const cloud = await loadCloudData();
+    if (!cloud) {
+      await saveCloudData(local);
+      return { data: local, source: 'local-seeded-cloud' };
+    }
+    const cloudTs = cloud?._meta?.updatedAt || 0;
+    const localTs = local?._meta?.updatedAt || 0;
+    const selected = cloudTs >= localTs ? cloud : local;
+    saveData(selected);
+    if (selected === local) await saveCloudData(local);
+    return { data: selected, source: selected === cloud ? 'cloud' : 'local-newer' };
+  } catch (e) {
+    console.warn('LexBrother: cloud init failed', e);
+    return { data: local, source: 'local-fallback', error: e.message || 'Cloud sync failed' };
+  }
+}
+
+async function persistData(data) {
+  const stamped = saveData(data);
+  if (!isCloudConfigured()) return { local: true, cloud: 'not-configured' };
+  try {
+    await saveCloudData(stamped);
+    return { local: true, cloud: 'ok' };
+  } catch (e) {
+    console.warn('LexBrother: cloud save failed', e);
+    return { local: true, cloud: 'error', error: e.message || 'Cloud save failed' };
+  }
 }
 
 // ── API Key ───────────────────────────────────────────────────────────────────
@@ -567,7 +684,8 @@ Respond in 1–4 bullet points max. Only flag things that genuinely matter for u
 
 window.LexStore = {
   DEFAULT_COURSES,
-  loadData, saveData,
+  loadData, saveData, initializeData, persistData,
+  loadCloudConfig, saveCloudConfig, isCloudConfigured,
   loadApiKey, saveApiKey,
   callClaude, callAnthropicAPI, callBuiltIn,
   parseTOC, basicCleanTOC, basicCleanContent,
