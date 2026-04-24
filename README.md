@@ -2,7 +2,7 @@
 
 A personal law school companion. Paste e-textbook content into a per-course workspace, generate rigorous multiple-choice quizzes via the Claude API, and write case briefs that export to a clean Word document.
 
-Single-user, browser-first with optional cloud sync. Data is always cached in browser `localStorage`, and can sync to Supabase so your courses/chapters/briefs/quizzes follow you across devices. Your Anthropic API key is stored only in your browser and is sent directly to Anthropic — nothing is proxied through a server.
+Single-user, browser-only. All data lives in your browser's `localStorage`. Your Anthropic API key is stored only in your browser and is sent directly to Anthropic — nothing is proxied through a server.
 
 ## Features
 
@@ -12,7 +12,7 @@ Single-user, browser-first with optional cloud sync. Data is always cached in br
 
 ## Stack
 
-Vanilla React 18 loaded via CDN, JSX compiled in-browser by `@babel/standalone`. No build step. Optional Supabase REST backend for cloud sync.
+Vanilla React 18 loaded via CDN, JSX compiled in-browser by `@babel/standalone`. No build step. No backend. Data persists in `localStorage` only.
 
 ```
 index.html        # App shell, loads React + Babel + all components
@@ -59,51 +59,7 @@ That's it. Cloudflare will serve `index.html` at the site URL. Every future `git
 
 Without a key, the app falls back to a built-in quota (rate-limited and capped at 30 questions per quiz). With a key, you get up to 500 questions and full TOC cleanup on Claude Opus 4.7.
 
-## Cloud sync (Supabase)
-
-1. Create a Supabase project.
-2. In SQL editor, run:
-
-```sql
-create table if not exists public.lexbrother_data (
-  sync_id text primary key,
-  payload jsonb not null,
-  updated_at timestamptz not null default now()
-);
-
-alter table public.lexbrother_data enable row level security;
-
-create policy "lexbrother read"
-on public.lexbrother_data
-for select
-to anon
-using (true);
-
-create policy "lexbrother upsert"
-on public.lexbrother_data
-for insert
-to anon
-with check (true);
-
-create policy "lexbrother update"
-on public.lexbrother_data
-for update
-to anon
-using (true)
-with check (true);
-```
-
-3. In Supabase **Project Settings → API**, copy:
-   - Project URL
-   - `anon` public key
-4. In LexBrother sidebar, click **☁** and paste:
-   - Supabase URL
-   - anon key
-   - a private Sync ID (use the exact same value on every device)
-
-After saving, LexBrother loads whichever copy is newer (local or cloud) and then keeps syncing automatically.
-
-## Local backup
+## Data backup
 
 All data is in one localStorage key: `lexbrother_v1`. To back up manually:
 
@@ -119,4 +75,4 @@ localStorage.setItem('lexbrother_v1', /* paste JSON string */);
 location.reload();
 ```
 
-Clearing browser data or using incognito still wipes local cache, so keep cloud sync enabled (or export backups) for safety across devices.
+Clearing browser data, using incognito, or switching devices wipes it. A future upgrade path would be to add Supabase or a similar backend for cloud sync.

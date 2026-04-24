@@ -1,31 +1,19 @@
 // Sidebar — course navigation, custom courses, reset/delete
 const { useState: useSidebarState, useEffect: useSidebarEffect } = React;
 
-function Sidebar({ courses, customCourses, activeCourse, onSelect, onResetCourse, onAddCourse, onDeleteCourse, cloudStatus, onCloudConfigSaved }) {
+function Sidebar({ courses, customCourses, activeCourse, onSelect, onResetCourse, onAddCourse, onDeleteCourse }) {
   const [hoveredId,    setHoveredId]    = useSidebarState(null);
   const [confirmModal, setConfirmModal] = useSidebarState(null); // { id, mode: 'reset'|'delete' }
   const [confirmText,  setConfirmText]  = useSidebarState('');
   const [apiKeyModal,  setApiKeyModal]  = useSidebarState(false);
-  const [cloudModal,   setCloudModal]   = useSidebarState(false);
   const [apiKeyInput,  setApiKeyInput]  = useSidebarState('');
   const [apiKeySaved,  setApiKeySaved]  = useSidebarState(false);
   const [addingCourse, setAddingCourse] = useSidebarState(false);
   const [newCourse,    setNewCourse]    = useSidebarState('');
-  const [cloudUrl,     setCloudUrl]     = useSidebarState('');
-  const [cloudAnonKey, setCloudAnonKey] = useSidebarState('');
-  const [cloudSyncId,  setCloudSyncId]  = useSidebarState('');
-  const [cloudSaved,   setCloudSaved]   = useSidebarState(false);
 
   useSidebarEffect(() => {
     if (apiKeyModal) setApiKeyInput(window.LexStore.loadApiKey());
   }, [apiKeyModal]);
-  useSidebarEffect(() => {
-    if (!cloudModal) return;
-    const cfg = window.LexStore.loadCloudConfig();
-    setCloudUrl(cfg.url);
-    setCloudAnonKey(cfg.anonKey);
-    setCloudSyncId(cfg.syncId);
-  }, [cloudModal]);
 
   const canConfirm = confirmText.trim().toLowerCase() === (confirmModal?.mode === 'delete' ? 'delete course' : 'reset course');
 
@@ -40,13 +28,6 @@ function Sidebar({ courses, customCourses, activeCourse, onSelect, onResetCourse
     window.LexStore.saveApiKey(apiKeyInput);
     setApiKeySaved(true);
     setTimeout(() => { setApiKeySaved(false); setApiKeyModal(false); }, 900);
-  }
-
-  async function saveCloudConfig() {
-    window.LexStore.saveCloudConfig({ url: cloudUrl, anonKey: cloudAnonKey, syncId: cloudSyncId });
-    setCloudSaved(true);
-    await onCloudConfigSaved?.();
-    setTimeout(() => { setCloudSaved(false); setCloudModal(false); }, 900);
   }
 
   function handleAddCourse() {
@@ -144,10 +125,7 @@ function Sidebar({ courses, customCourses, activeCourse, onSelect, onResetCourse
 
         <div style={sS.footer}>
           <div style={sS.footerDot} />
-          <span style={sS.footerText}>{cloudStatus || '1L · Spring 2026'}</span>
-          <button style={sS.keyBtn} onClick={() => setCloudModal(true)} title="Cloud Sync Settings">
-            ☁
-          </button>
+          <span style={sS.footerText}>1L · Spring 2026</span>
           <button style={sS.keyBtn} onClick={() => setApiKeyModal(true)} title="API Key Settings">
             {window.LexStore.loadApiKey() ? '✦' : '⚙'}
           </button>
@@ -225,30 +203,6 @@ function Sidebar({ courses, customCourses, activeCourse, onSelect, onResetCourse
             <div style={sS.modalFoot}>
               <button style={sS.btnGhost} onClick={() => setApiKeyModal(false)}>Cancel</button>
               <button style={sS.btnPrimary} onClick={saveApiKey}>{apiKeySaved ? 'Saved ✓' : 'Save Key'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Cloud Sync Modal ── */}
-      {cloudModal && (
-        <div style={sS.overlay}>
-          <div style={sS.modal}>
-            <div style={sS.modalHead}>
-              <div style={sS.modalTitle}>Supabase Cloud Sync</div>
-              <button style={sS.modalX} onClick={() => setCloudModal(false)}>✕</button>
-            </div>
-            <div style={sS.modalBody}>
-              <p style={sS.modalDesc}>
-                Enter your Supabase project URL, anon key, and a private sync ID (same on every device). App data will save to the cloud automatically.
-              </p>
-              <input style={sS.confirmInput} placeholder="https://YOUR-PROJECT.supabase.co" value={cloudUrl} onChange={e => setCloudUrl(e.target.value)} />
-              <input style={{ ...sS.confirmInput, marginTop: 8, fontFamily: 'inherit' }} type="password" placeholder="Supabase anon key" value={cloudAnonKey} onChange={e => setCloudAnonKey(e.target.value)} />
-              <input style={{ ...sS.confirmInput, marginTop: 8, fontFamily: 'inherit' }} placeholder="Private sync ID (example: lexbrother-jane-1)" value={cloudSyncId} onChange={e => setCloudSyncId(e.target.value)} />
-            </div>
-            <div style={sS.modalFoot}>
-              <button style={sS.btnGhost} onClick={() => setCloudModal(false)}>Cancel</button>
-              <button style={sS.btnPrimary} onClick={saveCloudConfig}>{cloudSaved ? 'Saved ✓' : 'Save & Sync'}</button>
             </div>
           </div>
         </div>
