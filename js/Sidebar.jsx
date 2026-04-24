@@ -1,7 +1,7 @@
 // Sidebar — course navigation, custom courses, reset/delete
 const { useState: useSidebarState, useEffect: useSidebarEffect } = React;
 
-function Sidebar({ courses, customCourses, activeCourse, onSelect, onResetCourse, onAddCourse, onDeleteCourse }) {
+function Sidebar({ courses, customCourses, activeCourse, onSelect, onResetCourse, onAddCourse, onDeleteCourse, userEmail, onSignOut }) {
   const [hoveredId,    setHoveredId]    = useSidebarState(null);
   const [confirmModal, setConfirmModal] = useSidebarState(null); // { id, mode: 'reset'|'delete' }
   const [confirmText,  setConfirmText]  = useSidebarState('');
@@ -130,6 +130,13 @@ function Sidebar({ courses, customCourses, activeCourse, onSelect, onResetCourse
             {window.LexStore.loadApiKey() ? '✦' : '⚙'}
           </button>
         </div>
+
+        {userEmail && (
+          <div style={sS.account}>
+            <span style={sS.accountEmail} title={userEmail}>{userEmail}</span>
+            <button style={sS.signOutBtn} onClick={onSignOut} title="Sign out">Sign out</button>
+          </div>
+        )}
       </aside>
 
       {/* ── Confirm Modal (reset or delete) ── */}
@@ -182,7 +189,7 @@ function Sidebar({ courses, customCourses, activeCourse, onSelect, onResetCourse
             </div>
             <div style={sS.modalBody}>
               <p style={sS.modalDesc}>
-                Your API key enables AI-powered TOC cleanup and quiz generation up to 500 questions via Claude Opus. Stored only in your browser.
+                Your API key enables AI-powered TOC cleanup and quiz generation up to 500 questions via Claude Opus. Synced to your account so it's available on all your devices.
               </p>
               <input
                 style={sS.confirmInput}
@@ -238,6 +245,9 @@ const sS = {
   footerDot: { width:9, height:9, borderRadius:'50%', background:'#2A6049', flexShrink:0 },
   footerText:{ fontSize:11, color:'rgba(26,23,20,0.7)', flex:1, fontWeight:500 },
   keyBtn:    { background:'none', border:'none', fontSize:16, cursor:'pointer', padding:2, color:'#1A1714', opacity:0.8, fontFamily:'system-ui,sans-serif' },
+  account:   { padding:'8px 16px 12px 22px', borderTop:'1px solid #D8D0C0', display:'flex', alignItems:'center', gap:8 },
+  accountEmail:{ flex:1, minWidth:0, fontSize:11, color:'rgba(26,23,20,0.6)', fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' },
+  signOutBtn:{ background:'none', border:'1px solid rgba(26,23,20,0.15)', borderRadius:4, padding:'3px 8px', fontSize:11, color:'rgba(26,23,20,0.7)', cursor:'pointer', fontFamily:'inherit' },
   // Modals
   overlay:   { position:'fixed', inset:0, background:'rgba(26,39,68,.55)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2000, backdropFilter:'blur(2px)' },
   modal:     { background:'#FFFFFF', borderRadius:12, width:'90%', maxWidth:440, boxShadow:'0 24px 64px rgba(26,39,68,.3)', overflow:'hidden' },
