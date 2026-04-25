@@ -237,9 +237,20 @@ function QuizTab({ course, onUpdate }) {
         allChapterQuestions: existingQs,
         interBatchDelayMs:   hasApiKey ? 400 : 900,
         shouldCancel: () => cancelRef.current,
+        cachedCatalog: ch.catalog || null,
+        onCatalogBuilt: (newCatalog) => {
+          // Persist the freshly-built catalog on the chapter so future quiz
+          // runs on the same content reuse it and skip the catalog API calls.
+          const updatedChapters = course.chapters.map(c =>
+            c.id === selChapter ? { ...c, catalog: newCatalog } : c
+          );
+          onUpdate({ chapters: updatedChapters });
+        },
         onStatus: (info) => {
           if (info.phase === 'chunked') {
             setGenState(prev => ({ ...prev, status: `Long chapter — processing in ${info.totalChunks} sections` }));
+          } else if (info.phase === 'catalog-cached') {
+            setGenState(prev => ({ ...prev, status: `Using cached topic catalog (${info.totalTopics} topics) — skipping catalog phase` }));
           } else if (info.phase === 'catalog') {
             const range = info.pageRange ? ` (pages ${info.pageRange.start}–${info.pageRange.end})` : '';
             const which = info.totalChunks > 1 ? ` ${info.chunkIndex + 1} of ${info.totalChunks}` : '';

@@ -425,6 +425,25 @@ const QUIZ_MAX_CHUNK_CHARS       = 80000;
 // number when warranted).
 const QUIZ_SYNTHESIS_CC_RATIO    = 0.25;
 
+// Bumping this invalidates every previously-cached catalog so an updated
+// catalog prompt or scheme takes effect on the next run.
+const QUIZ_CATALOG_CACHE_VERSION = 1;
+
+// Cheap content hash used as a catalog fingerprint. Not cryptographic;
+// collisions are vanishingly rare for chapter-sized strings of varying length.
+function hashString(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+function computeCatalogFingerprint(content, chunkCap = QUIZ_MAX_CHUNK_CHARS) {
+  return `${hashString(content)}-${chunkCap}-v${QUIZ_CATALOG_CACHE_VERSION}`;
+}
+
 // ── Quiz generation: stable system prompt (cached across batches and runs) ────
 // Chapter-agnostic, run-agnostic. Per-run stuff (chapter title, focus area,
 // batch number, covered topics) is assembled into the user message instead.
@@ -1122,10 +1141,12 @@ Now produce the JSON array of questions for this batch.`;
 async function generateQuizForChapter({
   content, chapterTitle, totalQuestions, batchSize, questionType,
   focusArea = '', allChapterQuestions = [],
-  onBatch       = () => {},
-  onStatus      = () => {},
-  shouldCancel  = () => false,
+  onBatch         = () => {},
+  onStatus        = () => {},
+  shouldCancel    = () => false,
   interBatchDelayMs = 0,
+  cachedCatalog,                  // { fingerprint, perChunk, builtAt } | null
+  onCatalogBuilt  = () => {},     // (fresh catalog object) => void — for persistence
 }) {
   if (!content || !content.trim()) throw new Error('Chapter has no content to quiz on.');
   if (totalQuestions <= 0) return [];
@@ -1133,14 +1154,29 @@ async function generateQuizForChapter({
   const chunks = chunkChapter(content);
   const allQuestions = [];
 
-  // Catalog phase — runs for every chapter (single- or multi-chunk). Soft signal:
-  // failures are logged and the affected chunk just runs without the checklist.
   if (chunks.length > 1) {
     onStatus({ phase: 'chunked', totalChunks: chunks.length });
   }
-  const catalog = await buildChapterCatalog({
-    chunks, chapterTitle, shouldCancel, onStatus,
-  });
+
+  // Catalog phase — reuse the cached catalog if its fingerprint matches the
+  // current content + chunking cap + cache version. Otherwise build fresh and
+  // hand the result back to the caller for persistence.
+  const fingerprint = computeCatalogFingerprint(content);
+  let catalog;
+  if (cachedCatalog && cachedCatalog.fingerprint === fingerprint && Array.isArray(cachedCatalog.perChunk)) {
+    const totalTopics = cachedCatalog.perChunk.reduce((s, c) => s + (Array.isArray(c) ? c.length : 0), 0);
+    onStatus({ phase: 'catalog-cached', totalTopics, totalChunks: chunks.length });
+    catalog = { perChunk: cachedCatalog.perChunk, failures: [] };
+  } else {
+    catalog = await buildChapterCatalog({
+      chunks, chapterTitle, shouldCancel, onStatus,
+    });
+    onCatalogBuilt({
+      fingerprint,
+      perChunk: catalog.perChunk,
+      builtAt: Date.now(),
+    });
+  }
   if (shouldCancel()) return allQuestions;
 
   // Single-pass mode — chapter fits in one chunk.
@@ -1531,6 +1567,7 @@ window.LexStore = {
   generateCrossSectionSynthesis,
   runCoverageAudit,
   chunkChapter,
+  computeCatalogFingerprint,
   generateBriefsHTML,
   generateMissReportHTML,
   generateRedFlagReview,
