@@ -270,6 +270,11 @@ function QuizTab({ course, onUpdate }) {
             audit = info.audit;
           } else if (info.phase === 'audit-warning') {
             warnings.push(`Coverage audit failed: ${info.error}`);
+          } else if (info.phase === 'batch-warning') {
+            const where = info.totalChunks > 1
+              ? `Section ${info.chunkIndex + 1}/${info.totalChunks} batch ${info.batchIndex + 1}/${info.totalBatches}`
+              : `Batch ${info.batchIndex + 1}/${info.totalBatches}`;
+            warnings.push(`${where} skipped: ${info.error}`);
           }
         },
         onBatch: (_batch, info) => {
