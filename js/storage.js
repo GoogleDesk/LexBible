@@ -456,7 +456,7 @@ Return ONLY a valid JSON array — no markdown fences, no commentary, no preambl
   "choices":     object  — keys "A","B","C","D" each mapping to the answer text
   "correct":     string  — one of "A" | "B" | "C" | "D"
   "explanation": string  — 3-5 sentences citing the source
-  "qtype":       string  — "fact" or "application"
+  "qtype":       string  — "fact" | "application" | "compare-contrast" (use the value the user instruction for this batch directs)
   "topic":       string  — short canonical label for the doctrine/case/rule being tested (used for cross-batch deduplication)
 
 Example shape:
@@ -703,6 +703,101 @@ function formatCatalogForPrompt(catalog) {
     .join('\n');
 }
 
+// ── Cross-section synthesis: compare/contrast across chunks ──────────────────
+// Runs once after per-chunk batches in chunked mode. Sees the master catalog
+// (organized by section) and the questions already generated as anchors. Asks
+// the model to write compare/contrast questions that span sections. Returns
+// an array; throws if the API call itself fails. Caller decides whether to
+// surface throws as errors or warnings.
+async function generateCrossSectionSynthesis({
+  chunks, perChunkCatalogs, generatedQuestions,
+  chapterTitle, focusArea = '',
+}) {
+  // Need at least 2 sections with non-empty catalogs to have anything to contrast.
+  const sections = perChunkCatalogs
+    .map((cat, ci) => ({
+      label: chunks[ci].pageRange
+        ? `pages ${chunks[ci].pageRange.start}–${chunks[ci].pageRange.end}`
+        : `section ${ci + 1}`,
+      topics: cat || [],
+    }))
+    .filter(s => s.topics.length > 0);
+  if (sections.length < 2) return [];
+
+  const catalogText = sections.map(s =>
+    `── Section: ${s.label} ──\n` +
+    s.topics.map((t, i) => `  ${i + 1}. [${t.type}, ${t.importance}] ${t.topic}`).join('\n')
+  ).join('\n\n');
+
+  const anchorsText = (generatedQuestions || [])
+    .map((q, i) => {
+      const topic = q.topic ? `[${q.topic}] ` : '';
+      const stem  = (q.question || '').slice(0, 200);
+      return `${i + 1}. ${topic}${stem}`;
+    })
+    .join('\n');
+
+  const focusBlock = focusArea && focusArea.trim()
+    ? `\nStudent focus area: "${focusArea.trim()}" — weight cross-section pairings toward this focus where applicable.\n`
+    : '';
+
+  const userBlock =
+`═══ CROSS-SECTION COMPARE/CONTRAST PASS ═══
+Chapter: "${chapterTitle}"
+${focusBlock}
+The chapter is large enough that earlier passes processed it section by section. Per-section quizzes are already complete. Your job in THIS pass is to write COMPARE/CONTRAST questions that span MULTIPLE sections — questions that test whether the student understands how doctrines, cases, or rules in DIFFERENT sections relate, contrast, build on each other, or come into tension.
+
+═══ TOPIC CATALOG (organized by section) ═══
+${catalogText}
+
+═══ ALREADY-GENERATED QUESTIONS (anchors — do NOT duplicate these) ═══
+${anchorsText || '(none yet)'}
+
+═══ THIS PASS — REQUIREMENTS ═══
+• Tag every question with "qtype":"compare-contrast" and a short cross-section "topic" label (e.g. "Erie vs. Hanna — choice of law evolution").
+• Each question MUST reference content from at least TWO different sections above. Surface that pairing in the question stem (e.g. "Compare the rule from Section 'pages 18–34' with the rule from Section 'pages 60–88' …").
+• Identify GENUINE doctrinal pairings: same doctrine treated differently in two cases, two rules in tension, a doctrine evolving across the chapter, a holding revisited or distinguished by a later case, etc.
+• If the chapter doesn't genuinely support cross-section compare/contrast (e.g. each section covers an unrelated topic), output a SMALL number rather than fabricate forced or shallow comparisons. Quality over quantity.
+• There is NO upper limit. Produce one question per genuine pairing you identify — if there are 15 substantive cross-section pairings, write 15 questions. Under-using compare/contrast on a chapter rich in pairings is a quality failure.
+• Apply the same anti-copying rules from the system prompt to any application-style fact patterns within compare/contrast questions.
+• All other quality rules from the system prompt apply (one clearly correct answer, plausible distractors, 3-5 sentence explanation citing the source).
+
+Now produce the JSON array of compare/contrast questions.`;
+
+  const result = await callClaudeRich({
+    system: [
+      { type: 'text', text: QUIZ_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+    ],
+    messages: [{
+      role: 'user',
+      content: [{ type: 'text', text: userBlock }],
+    }],
+    maxTokens: 32000,
+    thinking: { type: 'enabled', budget_tokens: 16000 },
+  });
+
+  if (result.stopReason === 'max_tokens') {
+    throw new Error('Cross-section synthesis: output was truncated (hit max_tokens).');
+  }
+
+  const match = result.text.match(/\[[\s\S]*\]/);
+  if (!match) throw new Error('Cross-section synthesis: could not parse JSON response.');
+
+  let questions;
+  try {
+    questions = JSON.parse(match[0]);
+  } catch(e) {
+    const lastBrace = match[0].lastIndexOf('}');
+    if (lastBrace === -1) throw new Error('Cross-section synthesis: malformed JSON.');
+    try { questions = JSON.parse(match[0].slice(0, lastBrace + 1) + ']'); }
+    catch(e2) { throw new Error('Cross-section synthesis: malformed JSON.'); }
+  }
+  if (!Array.isArray(questions)) return [];
+
+  // Force qtype on every question — model occasionally drops it on synthesis output.
+  return questions.map(q => ({ ...q, qtype: 'compare-contrast' }));
+}
+
 // ── Quiz batch generation (rigorous, coverage-mandated) ───────────────────────
 // Generates ONE batch against the supplied content. Callers responsible for
 // keeping content under QUIZ_MAX_SINGLE_PASS_CHARS — generateQuizForChapter
@@ -924,6 +1019,33 @@ async function generateQuizForChapter({
       if (moreToCome && interBatchDelayMs > 0 && !shouldCancel()) {
         await new Promise(r => setTimeout(r, interBatchDelayMs));
       }
+    }
+  }
+
+  // Cross-section synthesis — only meaningful when chunks > 1 (single-chunk
+  // batches already saw the full chapter, so cross-section questions there
+  // would just be normal compare/contrast handled inside generateQuizBatch).
+  if (!shouldCancel() && chunks.length > 1) {
+    onStatus({ phase: 'synthesis', totalChunks: chunks.length });
+    try {
+      const ccQuestions = await generateCrossSectionSynthesis({
+        chunks,
+        perChunkCatalogs:   catalog.perChunk,
+        generatedQuestions: allQuestions,
+        chapterTitle, focusArea,
+      });
+      if (ccQuestions.length > 0) {
+        allQuestions.push(...ccQuestions);
+        onBatch(ccQuestions, {
+          phase: 'synthesis',
+          chunkIndex: -1, totalChunks: chunks.length,
+          batchIndex: 0, totalBatches: 1,
+          pageRange: null,
+        });
+      }
+    } catch (e) {
+      console.warn(`Cross-section synthesis failed for "${chapterTitle}":`, e.message);
+      // Soft failure — user still gets per-chunk questions.
     }
   }
 
@@ -1158,6 +1280,7 @@ window.LexStore = {
   generateQuizBatch,
   generateQuizForChapter,
   buildChunkCatalog, buildChapterCatalog,
+  generateCrossSectionSynthesis,
   chunkChapter,
   generateBriefsHTML,
   generateMissReportHTML,
