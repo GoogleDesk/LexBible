@@ -296,6 +296,9 @@ The student has requested that questions focus specifically on: "${focusArea.tri
 
 ${batchNote}
 ${focusInstruction}
+═══ INPUT NOISE TOLERANCE ═══
+The chapter content was copy-pasted from a PDF or e-textbook and is expected to contain typos, broken spacing (e.g. "T h e" or "absolve s"), run-together words, missing periods, mid-sentence section labels, stray punctuation, and similar artifacts. Mentally normalize this noise before extracting topics — read for legal substance, not surface formatting. NEVER skip a topic, case, rule, doctrine, or note because the surrounding text is poorly formatted: if the legal substance is recoverable from context, you must catalog and test it. Only ignore content that is genuinely unintelligible after a best-effort charitable reading. When you write the question, restate the rule or facts in clean prose — do not quote the garbled source verbatim.
+
 ═══ MANDATORY COVERAGE REQUIREMENT ═══
 You MUST test the ENTIRE chapter — every case, doctrine, rule, note, problem, and concept.
 STEP 1: Mentally catalog every distinct topic in the chapter content below.
