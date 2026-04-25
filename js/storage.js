@@ -382,10 +382,13 @@ function parseTOC(text) {
 // ── Question identity key ─────────────────────────────────────────────────────
 function qKey(q) { return (q.question || '').slice(0, 100).trim(); }
 
-// ── Quiz generation: single-pass char limit ───────────────────────────────────
-// Anything larger needs map-reduce (see follow-up commit). Until then we throw
-// loudly rather than silently slicing the chapter's tail off.
+// ── Quiz generation: chunking thresholds ──────────────────────────────────────
+// Single-pass safety ceiling: hard upper bound on what we'll send in one call.
+// Chunk ceiling: target size for each chunk in map-reduce mode — kept under
+// the single-pass ceiling to leave headroom for cross-chunk context the next
+// commit will add (per-chunk topic catalog, cross-section synthesis).
 const QUIZ_MAX_SINGLE_PASS_CHARS = 400000;
+const QUIZ_MAX_CHUNK_CHARS       = 350000;
 
 // ── Quiz generation: stable system prompt (cached across batches and runs) ────
 // Chapter-agnostic, run-agnostic. Per-run stuff (chapter title, focus area,
@@ -459,19 +462,117 @@ Return ONLY a valid JSON array — no markdown fences, no commentary, no preambl
 Example shape:
 [{"question":"...","choices":{"A":"...","B":"...","C":"...","D":"..."},"correct":"A","explanation":"...","qtype":"fact","topic":"Erie doctrine — substantive vs procedural"}]`;
 
+// ── Chunking for long chapters ────────────────────────────────────────────────
+// Split a chapter into chunks no larger than maxChunkChars, preferring to cut
+// at [Page N] boundaries (preserved by basicCleanContent). Falls back to
+// paragraph breaks, then sentence breaks. Last resort: hard split at the cap.
+//
+// Returns [{index, content, charCount, pageRange}] where pageRange is
+// {start, end} | null based on [Page N] markers within the chunk.
+function chunkChapter(content, maxChunkChars = QUIZ_MAX_CHUNK_CHARS) {
+  if (!content) return [];
+  if (content.length <= maxChunkChars) {
+    return [{ index: 0, content, charCount: content.length, pageRange: extractPageRange(content) }];
+  }
+
+  // Cut points = positions at which it's OK to start a new chunk.
+  // Position 0 is implicit; we accumulate other candidates from natural boundaries.
+  const cuts = collectCutPoints(content);
+
+  const chunks = [];
+  let chunkStart = 0;
+  let lastUsableCut = 0;
+  for (const cut of cuts) {
+    if (cut <= chunkStart) continue;
+    if (cut - chunkStart <= maxChunkChars) {
+      lastUsableCut = cut;
+      continue;
+    }
+    // Adding this cut overflows. Close the current chunk at the best prior cut.
+    if (lastUsableCut > chunkStart) {
+      chunks.push(content.slice(chunkStart, lastUsableCut));
+      chunkStart    = lastUsableCut;
+      lastUsableCut = cut - chunkStart <= maxChunkChars ? cut : chunkStart;
+    } else {
+      // No natural boundary fits — hard split at the cap.
+      chunks.push(content.slice(chunkStart, chunkStart + maxChunkChars));
+      chunkStart    = chunkStart + maxChunkChars;
+      lastUsableCut = chunkStart;
+    }
+  }
+  // Push the remainder. If it (or no-boundary content) is still oversize, hard-split.
+  while (content.length - chunkStart > maxChunkChars) {
+    chunks.push(content.slice(chunkStart, chunkStart + maxChunkChars));
+    chunkStart += maxChunkChars;
+  }
+  if (chunkStart < content.length) chunks.push(content.slice(chunkStart));
+
+  return chunks.map((c, i) => ({
+    index:     i,
+    content:   c,
+    charCount: c.length,
+    pageRange: extractPageRange(c),
+  }));
+}
+
+// Cut points in priority order: [Page N] markers if present, otherwise
+// paragraph breaks, otherwise sentence ends. We always merge the resulting
+// list and sort, so chunkChapter can prefer the latest natural cut that fits.
+function collectCutPoints(content) {
+  const points = new Set();
+  let m;
+
+  const pageRe = /\[Page \d+\]/g;
+  let foundPage = false;
+  while ((m = pageRe.exec(content)) !== null) { points.add(m.index); foundPage = true; }
+  if (foundPage) return [...points].sort((a, b) => a - b);
+
+  const paraRe = /\n\n+/g;
+  let foundPara = false;
+  while ((m = paraRe.exec(content)) !== null) { points.add(m.index + m[0].length); foundPara = true; }
+  if (foundPara) return [...points].sort((a, b) => a - b);
+
+  const sentRe = /[.!?]\s+(?=[A-Z])/g;
+  while ((m = sentRe.exec(content)) !== null) points.add(m.index + 1);
+  return [...points].sort((a, b) => a - b);
+}
+
+function extractPageRange(text) {
+  const re = /\[Page (\d+)\]/g;
+  let m, lo = Infinity, hi = -Infinity;
+  while ((m = re.exec(text)) !== null) {
+    const n = parseInt(m[1], 10);
+    if (n < lo) lo = n;
+    if (n > hi) hi = n;
+  }
+  return hi === -Infinity ? null : { start: lo, end: hi };
+}
+
+// Hamilton-method proportional allocation: distribute `total` across slots
+// weighted by `weights`. Returns an int array summing exactly to `total`.
+function allocateProportional(total, weights) {
+  const sumW = weights.reduce((s, w) => s + w, 0) || 1;
+  const exact = weights.map(w => total * w / sumW);
+  const floors = exact.map(Math.floor);
+  let drift = total - floors.reduce((s, n) => s + n, 0);
+  // Distribute drift to slots with the largest fractional remainders.
+  const ranked = exact
+    .map((e, i) => ({ i, frac: e - Math.floor(e) }))
+    .sort((a, b) => b.frac - a.frac);
+  for (let k = 0; drift > 0 && k < ranked.length; k++, drift--) {
+    floors[ranked[k].i]++;
+  }
+  return floors;
+}
+
 // ── Quiz batch generation (rigorous, coverage-mandated) ───────────────────────
+// Generates ONE batch against the supplied content. Callers responsible for
+// keeping content under QUIZ_MAX_SINGLE_PASS_CHARS — generateQuizForChapter
+// does this by chunking long chapters before delegating here.
 async function generateQuizBatch({
   content, batchIndex, totalBatches, batchSize, questionType, chapterTitle,
   previousQuestions = [], allChapterQuestions = [], focusArea = '',
 }) {
-  if (content.length > QUIZ_MAX_SINGLE_PASS_CHARS) {
-    throw new Error(
-      `This chapter is too long for single-pass quiz generation ` +
-      `(${content.length.toLocaleString()} chars; current limit is ${QUIZ_MAX_SINGLE_PASS_CHARS.toLocaleString()}). ` +
-      `Map-reduce mode for very long chapters is coming in the next update — for now, please split the chapter into smaller sub-chapters or trim its content.`
-    );
-  }
-
   const typeInstruction = {
     fact:        `Generate ${batchSize} FACT-BASED questions. Each must test specific rules, legal standards, case holdings, statutory elements, or doctrinal definitions. Tag each with "qtype":"fact".`,
     application: `Generate ${batchSize} APPLICATION questions. Each must present a novel hypothetical fact pattern that obeys the anti-copying rules and require applying legal doctrine to reach a conclusion. Bar-exam issue-spotting style. Tag each with "qtype":"application".`,
@@ -562,6 +663,112 @@ Now produce the JSON array of questions for this batch.`;
     throw new Error(`Batch ${batchIndex + 1}: Empty response.`);
 
   return questions;
+}
+
+// ── Top-level quiz orchestrator (handles single-pass + map-reduce) ────────────
+// Single entry point for an entire quiz run. Chunks long chapters, allocates
+// questions proportionally across chunks, and runs batches sequentially.
+//
+// Callbacks:
+//   onBatch(questions, info)  — fired after each successful batch.
+//                                info: {chunkIndex, totalChunks, batchIndex, totalBatches, pageRange}
+//   onStatus(info)            — fired when entering a new phase or chunk.
+//                                info: {phase: 'single'|'chunked'|'chunk', chunkIndex?, totalChunks?, pageRange?, quota?}
+//   shouldCancel()            — polled before each batch; returns true to stop early.
+async function generateQuizForChapter({
+  content, chapterTitle, totalQuestions, batchSize, questionType,
+  focusArea = '', allChapterQuestions = [],
+  onBatch       = () => {},
+  onStatus      = () => {},
+  shouldCancel  = () => false,
+  interBatchDelayMs = 0,
+}) {
+  if (!content || !content.trim()) throw new Error('Chapter has no content to quiz on.');
+  if (totalQuestions <= 0) return [];
+
+  const chunks = chunkChapter(content);
+  const allQuestions = [];
+
+  // Single-pass mode — chapter fits in one chunk.
+  if (chunks.length === 1) {
+    onStatus({ phase: 'single' });
+    const totalBatches = Math.ceil(totalQuestions / batchSize);
+    for (let bi = 0; bi < totalBatches; bi++) {
+      if (shouldCancel()) break;
+      const remaining = totalQuestions - allQuestions.length;
+      const thisBatchSize = Math.min(batchSize, remaining);
+      if (thisBatchSize <= 0) break;
+      const batch = await generateQuizBatch({
+        content, batchIndex: bi, totalBatches, batchSize: thisBatchSize,
+        questionType, chapterTitle,
+        previousQuestions: allQuestions,
+        allChapterQuestions, focusArea,
+      });
+      allQuestions.push(...batch);
+      onBatch(batch, { chunkIndex: 0, totalChunks: 1, batchIndex: bi, totalBatches, pageRange: null });
+      if (bi < totalBatches - 1 && interBatchDelayMs > 0 && !shouldCancel()) {
+        await new Promise(r => setTimeout(r, interBatchDelayMs));
+      }
+    }
+    return allQuestions;
+  }
+
+  // Map-reduce mode — chapter is chunked.
+  onStatus({ phase: 'chunked', totalChunks: chunks.length });
+  const allocations = allocateProportional(
+    totalQuestions,
+    chunks.map(c => c.charCount),
+  );
+
+  for (let ci = 0; ci < chunks.length; ci++) {
+    if (shouldCancel()) break;
+    const chunk      = chunks[ci];
+    const chunkQuota = allocations[ci];
+    if (chunkQuota <= 0) continue;
+
+    const chunkLabel = chunk.pageRange
+      ? `${chapterTitle} (pages ${chunk.pageRange.start}–${chunk.pageRange.end})`
+      : `${chapterTitle} (section ${ci + 1} of ${chunks.length})`;
+
+    onStatus({
+      phase: 'chunk',
+      chunkIndex: ci, totalChunks: chunks.length,
+      pageRange: chunk.pageRange, quota: chunkQuota,
+    });
+
+    const chunkBatches = Math.ceil(chunkQuota / batchSize);
+    let producedThisChunk = 0;
+    for (let bi = 0; bi < chunkBatches; bi++) {
+      if (shouldCancel()) break;
+      const remaining     = chunkQuota - producedThisChunk;
+      const thisBatchSize = Math.min(batchSize, remaining);
+      if (thisBatchSize <= 0) break;
+      const batch = await generateQuizBatch({
+        content:    chunk.content,
+        batchIndex: bi,
+        totalBatches: chunkBatches,
+        batchSize:  thisBatchSize,
+        questionType,
+        chapterTitle: chunkLabel,
+        previousQuestions: allQuestions,   // dedup against everything generated so far in this run
+        allChapterQuestions,
+        focusArea,
+      });
+      allQuestions.push(...batch);
+      producedThisChunk += batch.length;
+      onBatch(batch, {
+        chunkIndex: ci, totalChunks: chunks.length,
+        batchIndex: bi, totalBatches: chunkBatches,
+        pageRange: chunk.pageRange,
+      });
+      const moreToCome = bi < chunkBatches - 1 || ci < chunks.length - 1;
+      if (moreToCome && interBatchDelayMs > 0 && !shouldCancel()) {
+        await new Promise(r => setTimeout(r, interBatchDelayMs));
+      }
+    }
+  }
+
+  return allQuestions;
 }
 
 // ── Briefs DOCX export ────────────────────────────────────────────────────────
@@ -790,6 +997,8 @@ window.LexStore = {
   aiCleanTOC,
   extractCasesFromContent,
   generateQuizBatch,
+  generateQuizForChapter,
+  chunkChapter,
   generateBriefsHTML,
   generateMissReportHTML,
   generateRedFlagReview,
