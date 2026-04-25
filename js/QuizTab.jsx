@@ -22,7 +22,7 @@ function QuizTab({ course, onUpdate }) {
   const [selChapter, setSelChapter] = useQState(null);
   const [chDropOpen, setChDropOpen] = useQState(false);
   const [settings,   setSettings]   = useQState({ count: 20, type: 'mix', focusArea: '' });
-  const [genState,   setGenState]   = useQState(null); // { total, done, error }
+  const [genState,   setGenState]   = useQState(null); // { total, done, error, status }
   const [genReport,  setGenReport]  = useQState(null); // { setId, chId, factCount, appCount }
   // Active quiz session
   const [session,    setSession]    = useQState(null);
@@ -212,31 +212,38 @@ function QuizTab({ course, onUpdate }) {
     const ch      = course.chapters.find(c => c.id === selChapter);
     const count   = Math.min(settings.count, maxQ);
     const BATCH   = hasApiKey ? 20 : 8;
-    const batches = Math.ceil(count / BATCH);
 
     // All questions from existing sets on this chapter (for overlap avoidance)
     const existingQs = (quizData[selChapter]?.sets || []).flatMap(s => s.questions || []);
 
     cancelRef.current = false;
-    setGenState({ total: count, done: 0, error: null });
-    const newQs = [];
+    setGenState({ total: count, done: 0, error: null, status: '' });
 
+    let newQs = [];
     try {
-      for (let i = 0; i < batches; i++) {
-        if (cancelRef.current) break;
-        const batchSize = Math.min(BATCH, count - newQs.length);
-        const batch = await window.LexStore.generateQuizBatch({
-          content: ch.content, batchIndex: i, totalBatches: batches, batchSize,
-          questionType: settings.type, chapterTitle: ch.title,
-          previousQuestions: newQs,
-          allChapterQuestions: existingQs,
-          focusArea: settings.focusArea || '',
-        });
-        newQs.push(...batch);
-        setGenState({ total: count, done: Math.min(newQs.length, count), error: null });
-        if (i < batches - 1 && !cancelRef.current)
-          await new Promise(r => setTimeout(r, hasApiKey ? 400 : 900));
-      }
+      newQs = await window.LexStore.generateQuizForChapter({
+        content:      ch.content,
+        chapterTitle: ch.title,
+        totalQuestions: count,
+        batchSize:    BATCH,
+        questionType: settings.type,
+        focusArea:    settings.focusArea || '',
+        allChapterQuestions: existingQs,
+        interBatchDelayMs:   hasApiKey ? 400 : 900,
+        shouldCancel: () => cancelRef.current,
+        onStatus: (info) => {
+          if (info.phase === 'chunked') {
+            setGenState(prev => ({ ...prev, status: `Long chapter — processing in ${info.totalChunks} sections` }));
+          } else if (info.phase === 'chunk') {
+            const range = info.pageRange ? `pages ${info.pageRange.start}–${info.pageRange.end}` : `section ${info.chunkIndex + 1}`;
+            setGenState(prev => ({ ...prev, status: `Section ${info.chunkIndex + 1} of ${info.totalChunks} (${range})` }));
+          }
+        },
+        onBatch: (_batch, _info) => {
+          // Re-read latest count from the closure-captured array via setGenState callback
+          setGenState(prev => prev && ({ ...prev, done: Math.min((prev.done || 0) + _batch.length, count) }));
+        },
+      });
 
       if (cancelRef.current && newQs.length < 2) { setGenState(null); return; }
 
@@ -285,6 +292,7 @@ function QuizTab({ course, onUpdate }) {
           <div style={qS.genSub}>{genState.done} of {genState.total}</div>
           <div style={qS.progressTrack}><div style={{ ...qS.progressFill, width: `${pct}%` }} /></div>
           <div style={qS.genPct}>{pct}%</div>
+          {genState.status && <div style={qS.genSub}>{genState.status}</div>}
           {genState.error && <div style={qS.errorBox}>{genState.error}</div>}
           <button style={qS.btnSecondary} onClick={() => { cancelRef.current = true; setGenState(null); }}>
             {genState.error ? 'Close' : 'Cancel'}
