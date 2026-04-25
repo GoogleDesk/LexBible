@@ -1127,60 +1127,58 @@ async function generateQuizForChapter({
         await new Promise(r => setTimeout(r, interBatchDelayMs));
       }
     }
-    return allQuestions;
-  }
+    // Fall through to synthesis (skipped automatically when chunks.length === 1)
+    // and audit (runs for every chapter).
+  } else {
+    // Map-reduce mode — chapter is chunked.
+    const allocations = allocateProportional(totalQuestions, chunks.map(c => c.charCount));
 
-  // Map-reduce mode — chapter is chunked.
-  const allocations = allocateProportional(
-    totalQuestions,
-    chunks.map(c => c.charCount),
-  );
-
-  for (let ci = 0; ci < chunks.length; ci++) {
-    if (shouldCancel()) break;
-    const chunk      = chunks[ci];
-    const chunkQuota = allocations[ci];
-    if (chunkQuota <= 0) continue;
-
-    const chunkLabel = chunk.pageRange
-      ? `${chapterTitle} (pages ${chunk.pageRange.start}–${chunk.pageRange.end})`
-      : `${chapterTitle} (section ${ci + 1} of ${chunks.length})`;
-
-    onStatus({
-      phase: 'chunk',
-      chunkIndex: ci, totalChunks: chunks.length,
-      pageRange: chunk.pageRange, quota: chunkQuota,
-    });
-
-    const chunkBatches = Math.ceil(chunkQuota / batchSize);
-    let producedThisChunk = 0;
-    for (let bi = 0; bi < chunkBatches; bi++) {
+    for (let ci = 0; ci < chunks.length; ci++) {
       if (shouldCancel()) break;
-      const remaining     = chunkQuota - producedThisChunk;
-      const thisBatchSize = Math.min(batchSize, remaining);
-      if (thisBatchSize <= 0) break;
-      const batch = await generateQuizBatch({
-        content:    chunk.content,
-        batchIndex: bi,
-        totalBatches: chunkBatches,
-        batchSize:  thisBatchSize,
-        questionType,
-        chapterTitle: chunkLabel,
-        previousQuestions: allQuestions,   // dedup against everything generated so far in this run
-        allChapterQuestions,
-        focusArea,
-        chunkCatalog: catalog.perChunk[ci] || null,
-      });
-      allQuestions.push(...batch);
-      producedThisChunk += batch.length;
-      onBatch(batch, {
+      const chunk      = chunks[ci];
+      const chunkQuota = allocations[ci];
+      if (chunkQuota <= 0) continue;
+
+      const chunkLabel = chunk.pageRange
+        ? `${chapterTitle} (pages ${chunk.pageRange.start}–${chunk.pageRange.end})`
+        : `${chapterTitle} (section ${ci + 1} of ${chunks.length})`;
+
+      onStatus({
+        phase: 'chunk',
         chunkIndex: ci, totalChunks: chunks.length,
-        batchIndex: bi, totalBatches: chunkBatches,
-        pageRange: chunk.pageRange,
+        pageRange: chunk.pageRange, quota: chunkQuota,
       });
-      const moreToCome = bi < chunkBatches - 1 || ci < chunks.length - 1;
-      if (moreToCome && interBatchDelayMs > 0 && !shouldCancel()) {
-        await new Promise(r => setTimeout(r, interBatchDelayMs));
+
+      const chunkBatches = Math.ceil(chunkQuota / batchSize);
+      let producedThisChunk = 0;
+      for (let bi = 0; bi < chunkBatches; bi++) {
+        if (shouldCancel()) break;
+        const remaining     = chunkQuota - producedThisChunk;
+        const thisBatchSize = Math.min(batchSize, remaining);
+        if (thisBatchSize <= 0) break;
+        const batch = await generateQuizBatch({
+          content:    chunk.content,
+          batchIndex: bi,
+          totalBatches: chunkBatches,
+          batchSize:  thisBatchSize,
+          questionType,
+          chapterTitle: chunkLabel,
+          previousQuestions: allQuestions,   // dedup against everything generated so far in this run
+          allChapterQuestions,
+          focusArea,
+          chunkCatalog: catalog.perChunk[ci] || null,
+        });
+        allQuestions.push(...batch);
+        producedThisChunk += batch.length;
+        onBatch(batch, {
+          chunkIndex: ci, totalChunks: chunks.length,
+          batchIndex: bi, totalBatches: chunkBatches,
+          pageRange: chunk.pageRange,
+        });
+        const moreToCome = bi < chunkBatches - 1 || ci < chunks.length - 1;
+        if (moreToCome && interBatchDelayMs > 0 && !shouldCancel()) {
+          await new Promise(r => setTimeout(r, interBatchDelayMs));
+        }
       }
     }
   }
