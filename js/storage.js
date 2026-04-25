@@ -167,7 +167,24 @@ function saveApiKey(key) {
 }
 
 // ── Anthropic direct call ─────────────────────────────────────────────────────
-async function callAnthropicAPI(apiKey, prompt, maxTokens = 16000) {
+// Returns { text, stopReason, usage, raw }. Supports system prompts, structured
+// content blocks (for cache_control), and extended thinking.
+async function callAnthropicAPI(apiKey, {
+  system,                 // string | array of content blocks
+  messages,               // array of {role, content} where content is string or block array
+  prompt,                 // convenience: builds messages = [{role:'user', content: prompt}]
+  maxTokens = 16000,
+  thinking,               // {type:'enabled', budget_tokens:N} | undefined
+} = {}) {
+  const body = {
+    model: 'claude-opus-4-7',
+    max_tokens: maxTokens,
+    messages: messages || [{ role: 'user', content: prompt || '' }],
+  };
+  if (system)   body.system   = system;
+  if (thinking) body.thinking = thinking;
+  // When thinking is enabled the API requires temperature=1 (the default), so we omit it.
+
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -176,26 +193,61 @@ async function callAnthropicAPI(apiKey, prompt, maxTokens = 16000) {
       'anthropic-dangerous-direct-browser-access': 'true',
       'content-type': 'application/json',
     },
-    body: JSON.stringify({
-      model: 'claude-opus-4-7',
-      max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
     throw new Error(err.error?.message || `API error ${response.status}`);
   }
   const data = await response.json();
-  return data.content[0].text;
+  // Extended thinking emits thinking blocks before the answer — pull the text block.
+  const textBlock = (data.content || []).find(b => b.type === 'text');
+  return {
+    text:       textBlock ? textBlock.text : '',
+    stopReason: data.stop_reason || null,
+    usage:      data.usage || null,
+    raw:        data,
+  };
 }
 
 async function callBuiltIn(prompt) { return window.claude.complete(prompt); }
 
+// Simple string-in / string-out shim used by single-prompt callers (TOC, briefs, red-flag).
 async function callClaude(prompt, maxTokens = 16000) {
   const key = loadApiKey();
-  if (key) return callAnthropicAPI(key, prompt, maxTokens);
+  if (key) {
+    const { text } = await callAnthropicAPI(key, { prompt, maxTokens });
+    return text;
+  }
   return callBuiltIn(prompt);
+}
+
+// Rich variant — returns {text, stopReason, usage, raw} so callers can detect
+// truncation, pass system prompts, enable extended thinking, etc.
+async function callClaudeRich(options = {}) {
+  const key = loadApiKey();
+  if (key) return callAnthropicAPI(key, options);
+  const text = await callBuiltIn(flattenForBuiltIn(options));
+  return { text, stopReason: 'end_turn', usage: null, raw: null };
+}
+
+// Flatten rich options to a single string for the built-in window.claude.complete fallback,
+// which doesn't support system prompts or structured content blocks.
+function flattenForBuiltIn({ system, messages, prompt } = {}) {
+  const blockText = b => (typeof b === 'string' ? b : (b && b.text) || '');
+  const parts = [];
+  if (system) {
+    parts.push(Array.isArray(system) ? system.map(blockText).join('\n\n') : String(system));
+  }
+  if (messages && messages.length) {
+    for (const m of messages) {
+      const c = m.content;
+      parts.push(Array.isArray(c) ? c.map(blockText).join('\n\n') : String(c || ''));
+    }
+  } else if (prompt) {
+    parts.push(prompt);
+  }
+  return parts.join('\n\n');
 }
 
 // ── TOC: basic cleanup ────────────────────────────────────────────────────────
@@ -415,10 +467,7 @@ Return ONLY a valid JSON array — no markdown fences, no commentary:
 Chapter content (note: [Page N] markers indicate page breaks — use them to honor page-range focus areas):
 ${content.slice(0, 90000)}`;
 
-  const apiKey = loadApiKey();
-  const text   = apiKey
-    ? await callAnthropicAPI(apiKey, prompt, 16000)
-    : await callBuiltIn(prompt);
+  const text = await callClaude(prompt, 16000);
 
   let match = text.match(/\[[\s\S]*\]/);
   if (!match) throw new Error(`Batch ${batchIndex + 1}: Could not parse JSON response.`);
@@ -660,7 +709,7 @@ window.LexStore = {
   loadData, saveData,
   loadApiKey, saveApiKey,
   initCloud, clearCloud, flushPendingSave,
-  callClaude, callAnthropicAPI, callBuiltIn,
+  callClaude, callClaudeRich, callAnthropicAPI, callBuiltIn,
   parseTOC, basicCleanTOC, basicCleanContent,
   aiCleanTOC,
   extractCasesFromContent,
