@@ -382,32 +382,47 @@ function parseTOC(text) {
 // ── Question identity key ─────────────────────────────────────────────────────
 function qKey(q) { return (q.question || '').slice(0, 100).trim(); }
 
-// ── Quiz batch generation (rigorous, coverage-mandated) ───────────────────────
-async function generateQuizBatch({
-  content, batchIndex, totalBatches, batchSize, questionType, chapterTitle,
-  previousQuestions = [], allChapterQuestions = [], focusArea = '',
-}) {
-  const typeInstructions = {
-    fact: `Generate ${batchSize} FACT-BASED questions. Each must test specific rules, legal standards, case holdings, statutory elements, or doctrinal definitions. Tag each with "qtype":"fact".`,
-    application: `Generate ${batchSize} APPLICATION questions. Each must present a novel hypothetical fact pattern (not found verbatim in the text) and require applying legal doctrine to reach a conclusion. Bar-exam issue-spotting style. Tag each with "qtype":"application".`,
-    mix: `Generate ${batchSize} questions: roughly half fact-based (rules, holdings, definitions) tagged "qtype":"fact" and half application-based (novel hypotheticals requiring doctrinal application) tagged "qtype":"application". Alternate between types for variety.`,
-  }[questionType] || `Generate ${batchSize} mixed questions tagged with "qtype":"fact" or "qtype":"application".`;
+// ── Quiz generation: single-pass char limit ───────────────────────────────────
+// Anything larger needs map-reduce (see follow-up commit). Until then we throw
+// loudly rather than silently slicing the chapter's tail off.
+const QUIZ_MAX_SINGLE_PASS_CHARS = 400000;
 
-  const allPrior = [...allChapterQuestions, ...previousQuestions];
-  const coveredTopics = allPrior.length > 0
-    ? allPrior.map((q, i) => `${i + 1}. ${(q.question || '').slice(0, 90)}`).join('\n')
-    : null;
+// ── Quiz generation: stable system prompt (cached across batches and runs) ────
+// Chapter-agnostic, run-agnostic. Per-run stuff (chapter title, focus area,
+// batch number, covered topics) is assembled into the user message instead.
+const QUIZ_SYSTEM_PROMPT = `You are a rigorous law professor writing comprehensive 1L exam questions.
 
-  const batchNote = totalBatches > 1
-    ? `This is batch ${batchIndex + 1} of ${totalBatches} (questions ${allPrior.length + 1}–${allPrior.length + batchSize} of the total set).`
-    : 'This is the only batch.';
+═══ MANDATORY COVERAGE REQUIREMENT ═══
+You MUST test the ENTIRE chapter — every case, doctrine, rule, note, problem, and concept.
+STEP 1: Catalog every distinct topic in the chapter content.
+STEP 2: Every topic must receive at least ONE question before any topic receives a second question.
+STEP 3: Only after full chapter coverage may you write additional questions on already-covered topics.
+STEP 4: Include compare/contrast questions wherever the chapter contains comparable doctrines, cases, or rules — as many as the material genuinely supports. There is NO upper limit on compare/contrast questions. Under-using compare/contrast on a chapter that contains, for example, five related cases is a quality failure.
 
-  // Detect whether the chapter content contains court cases
-  const hasCases = /\bv\.\s+[A-Z]/.test(content.slice(0, 8000));
+═══ APPLICATION QUESTIONS — ANTI-COPYING RULES (MANDATORY) ═══
+Application questions test whether the student can apply a doctrine to a NEW situation. Reusing a hypothetical from the source text defeats the entire purpose of an application question.
 
-  const caseQuestionInstructions = hasCases ? `
-═══ CASE-BASED QUESTION TYPES (REQUIRED when asking about a specific case) ═══
-When your question concerns a named court case, vary the question type across these categories — do NOT only ask about holdings. Distribute questions across all categories:
+FORBIDDEN:
+• Copying any fact pattern, hypothetical, or scenario from the source text.
+• Lightly paraphrasing a source hypothetical (e.g. changing names while keeping the structure or commercial context).
+• Asking a question whose answer can be located by Ctrl-F-ing the chapter.
+
+REQUIRED:
+• Construct a fact pattern that tests the SAME doctrine using DIFFERENT facts.
+• Change at least TWO of: parties, jurisdiction, factual context, claim/cause of action, procedural posture.
+• Self-check before finalizing each application question:
+  (a) Does this rule appear in the source? (it should — that's what's being tested)
+  (b) Does this fact pattern appear in the source? (it must NOT)
+  (c) Could the question be answered by skim-reading the source? (it must NOT)
+  If any check fails, rewrite the question.
+
+ILLUSTRATIVE EXAMPLE:
+  Source: "In Hadley v. Baxendale, a miller's broken crankshaft was sent for repair; the carrier's delay caused lost profits..."
+  BAD application question: "A miller sends a broken crankshaft to a carrier..."        ← copied
+  GOOD application question: "A bakery contracts with a courier to deliver a custom industrial mixer needed for a wedding-cake order; the courier delays delivery and the bakery loses the wedding contract..."   ← same doctrine, novel facts
+
+═══ CASE-BASED QUESTION TYPES (required when asking about a specific case) ═══
+When your question concerns a named court case, vary the question type across these categories — do NOT only ask about holdings. Distribute questions across all categories the case material genuinely supports:
 
 1. ISSUE — What precise legal question did the court address? What was genuinely disputed?
 2. FACTS — Key facts; how specific facts shaped the outcome; similarities/differences vs. other cases in the chapter; which facts were legally significant and why
@@ -419,7 +434,62 @@ When your question concerns a named court case, vary the question type across th
 8. ALTERED FACTS HYPOTHETICALS — "If [key fact] were different, would the outcome change?" These require deep causal reasoning about which facts were dispositive
 9. CRITIQUE — Which side had the stronger argument? What are the vulnerabilities in the majority's reasoning? What are the strongest counterarguments?
 10. PERSPECTIVE — How would this ruling be analyzed from the plaintiff's perspective? The defendant's? A policy perspective? A different interpretive school (textualist vs. purposivist, etc.)?
-` : '';
+
+═══ QUESTION QUALITY ═══
+• Questions must test DEEP understanding — NOT surface-level recognition of a single sentence.
+• Fact-based questions must require synthesis across the source, NOT single-sentence lookup.
+• Application questions must obey the anti-copying rules above.
+• One answer must be clearly and unambiguously correct.
+• Distractors must reflect plausible 1L misconceptions, not random wrong answers.
+• Explanations: 3-5 sentences citing specific rules, cases, or facts from the chapter (cite [Page N] markers when traceable).
+
+═══ INPUT NOISE TOLERANCE ═══
+The chapter content was copy-pasted from a PDF or e-textbook and is expected to contain typos, broken spacing (e.g. "T h e" or "absolve s"), run-together words, missing periods, mid-sentence section labels, stray punctuation, and similar artifacts. Mentally normalize this noise before extracting topics — read for legal substance, not surface formatting. NEVER skip a topic, case, rule, doctrine, or note because the surrounding text is poorly formatted: if the legal substance is recoverable from context, you must catalog and test it. Only ignore content that is genuinely unintelligible after a best-effort charitable reading. When you write the question, restate the rule or facts in clean prose — do not quote the garbled source verbatim.
+
+═══ OUTPUT FORMAT ═══
+Return ONLY a valid JSON array — no markdown fences, no commentary, no preamble. Each question object MUST have exactly these keys:
+
+  "question":    string  — the question stem
+  "choices":     object  — keys "A","B","C","D" each mapping to the answer text
+  "correct":     string  — one of "A" | "B" | "C" | "D"
+  "explanation": string  — 3-5 sentences citing the source
+  "qtype":       string  — "fact" or "application"
+  "topic":       string  — short canonical label for the doctrine/case/rule being tested (used for cross-batch deduplication)
+
+Example shape:
+[{"question":"...","choices":{"A":"...","B":"...","C":"...","D":"..."},"correct":"A","explanation":"...","qtype":"fact","topic":"Erie doctrine — substantive vs procedural"}]`;
+
+// ── Quiz batch generation (rigorous, coverage-mandated) ───────────────────────
+async function generateQuizBatch({
+  content, batchIndex, totalBatches, batchSize, questionType, chapterTitle,
+  previousQuestions = [], allChapterQuestions = [], focusArea = '',
+}) {
+  if (content.length > QUIZ_MAX_SINGLE_PASS_CHARS) {
+    throw new Error(
+      `This chapter is too long for single-pass quiz generation ` +
+      `(${content.length.toLocaleString()} chars; current limit is ${QUIZ_MAX_SINGLE_PASS_CHARS.toLocaleString()}). ` +
+      `Map-reduce mode for very long chapters is coming in the next update — for now, please split the chapter into smaller sub-chapters or trim its content.`
+    );
+  }
+
+  const typeInstruction = {
+    fact:        `Generate ${batchSize} FACT-BASED questions. Each must test specific rules, legal standards, case holdings, statutory elements, or doctrinal definitions. Tag each with "qtype":"fact".`,
+    application: `Generate ${batchSize} APPLICATION questions. Each must present a novel hypothetical fact pattern that obeys the anti-copying rules and require applying legal doctrine to reach a conclusion. Bar-exam issue-spotting style. Tag each with "qtype":"application".`,
+    mix:         `Generate ${batchSize} questions: roughly half fact-based (rules, holdings, definitions) tagged "qtype":"fact" and half application-based (novel hypotheticals — anti-copying rules apply) tagged "qtype":"application". Alternate between types for variety.`,
+  }[questionType] || `Generate ${batchSize} mixed questions tagged with "qtype":"fact" or "qtype":"application".`;
+
+  const allPrior = [...allChapterQuestions, ...previousQuestions];
+  const coveredItems = allPrior.length > 0
+    ? allPrior.map((q, i) => {
+        const topic = q.topic ? `[${q.topic}] ` : '';
+        const stem  = (q.question || '').slice(0, 200);
+        return `${i + 1}. ${topic}${stem}`;
+      }).join('\n')
+    : null;
+
+  const batchNote = totalBatches > 1
+    ? `This is batch ${batchIndex + 1} of ${totalBatches} (questions ${allPrior.length + 1}–${allPrior.length + batchSize} of the total set).`
+    : 'This is the only batch.';
 
   const focusInstruction = focusArea.trim() ? `
 ═══ STUDENT-SPECIFIED FOCUS AREA ═══
@@ -430,46 +500,52 @@ The student has requested that questions focus specifically on: "${focusArea.tri
 — Still draw on surrounding context for distractors and explanations, but weight question selection heavily toward the focus area.
 ` : '';
 
-  const prompt =
-`You are a rigorous law professor writing comprehensive 1L exam questions for: "${chapterTitle}".
+  // Cached block: chapter title + full chapter content. Stable across all batches in a run.
+  const chapterBlock =
+`Chapter: "${chapterTitle}"
 
-${batchNote}
+[Page N] markers indicate page breaks — use them to honor page-range focus areas and to cite source locations in explanations.
+
+Chapter content:
+${content}`;
+
+  // Fresh block: per-batch state. Changes every call, so not cached.
+  const batchBlock =
+`${batchNote}
 ${focusInstruction}
-═══ INPUT NOISE TOLERANCE ═══
-The chapter content was copy-pasted from a PDF or e-textbook and is expected to contain typos, broken spacing (e.g. "T h e" or "absolve s"), run-together words, missing periods, mid-sentence section labels, stray punctuation, and similar artifacts. Mentally normalize this noise before extracting topics — read for legal substance, not surface formatting. NEVER skip a topic, case, rule, doctrine, or note because the surrounding text is poorly formatted: if the legal substance is recoverable from context, you must catalog and test it. Only ignore content that is genuinely unintelligible after a best-effort charitable reading. When you write the question, restate the rule or facts in clean prose — do not quote the garbled source verbatim.
+═══ THIS BATCH ═══
+${typeInstruction}
 
-═══ MANDATORY COVERAGE REQUIREMENT ═══
-You MUST test the ENTIRE chapter — every case, doctrine, rule, note, problem, and concept.
-STEP 1: Mentally catalog every distinct topic in the chapter content below.
-STEP 2: Every topic must receive at least ONE question before any topic receives a second question.
-STEP 3: Only after full chapter coverage may you write additional questions on already-covered topics.
-STEP 4: Where genuinely applicable across different sections, include 1-2 compare/contrast questions that test understanding of how two different doctrines or cases relate to or differ from each other.
-${caseQuestionInstructions}
-═══ QUESTION QUALITY ═══
-• Questions must test DEEP understanding — NOT surface-level recognition of a single sentence
-• Application questions MUST use novel fact patterns not found verbatim in the text
-• Fact questions must require synthesis, NOT single-sentence lookup
-• One answer must be clearly and unambiguously correct
-• Distractors must be plausible but clearly wrong on careful analysis
-• Explanations: 3-5 sentences citing specific rules, cases, or facts from the content
-
-═══ QUESTION TYPE ═══
-${typeInstructions}
-
-${coveredTopics
-  ? `═══ ALREADY COVERED — AVOID REPEATING UNTIL ALL TOPICS ARE COVERED ═══\n${coveredTopics}\n`
+${coveredItems
+  ? `═══ ALREADY COVERED — AVOID REPEATING UNTIL ALL CHAPTER TOPICS ARE COVERED ═══\n${coveredItems}\n`
   : '═══ FIRST BATCH — Start with foundational topics and the most important cases/doctrines. ═══'}
 
-═══ OUTPUT FORMAT ═══
-Return ONLY a valid JSON array — no markdown fences, no commentary:
-[{"question":"...","choices":{"A":"...","B":"...","C":"...","D":"..."},"correct":"A","explanation":"...","qtype":"fact"}]
+Now produce the JSON array of questions for this batch.`;
 
-Chapter content (note: [Page N] markers indicate page breaks — use them to honor page-range focus areas):
-${content.slice(0, 90000)}`;
+  const result = await callClaudeRich({
+    system: [
+      { type: 'text', text: QUIZ_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+    ],
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: chapterBlock, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: batchBlock },
+      ],
+    }],
+    maxTokens: 32000,
+    thinking: { type: 'enabled', budget_tokens: 16000 },
+  });
 
-  const text = await callClaude(prompt, 16000);
+  if (result.stopReason === 'max_tokens') {
+    throw new Error(
+      `Batch ${batchIndex + 1}: Output was truncated (hit max_tokens before completing). ` +
+      `Try again, or reduce the batch size.`
+    );
+  }
 
-  let match = text.match(/\[[\s\S]*\]/);
+  const text = result.text;
+  const match = text.match(/\[[\s\S]*\]/);
   if (!match) throw new Error(`Batch ${batchIndex + 1}: Could not parse JSON response.`);
 
   let questions;
