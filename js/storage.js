@@ -1046,46 +1046,60 @@ ${coveredItems
 
 Now produce the JSON array of questions for this batch.`;
 
-  const result = await callClaudeRich({
-    system: [
-      { type: 'text', text: QUIZ_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
-    ],
-    messages: [{
-      role: 'user',
-      content: [
-        { type: 'text', text: chapterBlock, cache_control: { type: 'ephemeral' } },
-        { type: 'text', text: batchBlock },
-      ],
-    }],
-    maxTokens: 32000,
-    thinking: { type: 'enabled', budget_tokens: 16000 },
-  });
+  // Most JSON-parse failures from the model are transient — re-asking usually
+  // yields valid output. Retry once before propagating the error so a single
+  // hiccup doesn't kill the whole run when generateQuizForChapter calls us.
+  const maxAttempts = 2;
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await callClaudeRich({
+        system: [
+          { type: 'text', text: QUIZ_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+        ],
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: chapterBlock, cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: batchBlock },
+          ],
+        }],
+        maxTokens: 32000,
+        thinking: { type: 'enabled', budget_tokens: 16000 },
+      });
 
-  if (result.stopReason === 'max_tokens') {
-    throw new Error(
-      `Batch ${batchIndex + 1}: Output was truncated (hit max_tokens before completing). ` +
-      `Try again, or reduce the batch size.`
-    );
+      if (result.stopReason === 'max_tokens') {
+        throw new Error(
+          `Batch ${batchIndex + 1}: Output was truncated (hit max_tokens before completing). ` +
+          `Try again, or reduce the batch size.`
+        );
+      }
+
+      const text = result.text;
+      const match = text.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error(`Batch ${batchIndex + 1}: Could not parse JSON response.`);
+
+      let questions;
+      try {
+        questions = JSON.parse(match[0]);
+      } catch(e) {
+        const lastBrace = match[0].lastIndexOf('}');
+        if (lastBrace === -1) throw new Error(`Batch ${batchIndex + 1}: Could not parse JSON.`);
+        try { questions = JSON.parse(match[0].slice(0, lastBrace + 1) + ']'); }
+        catch(e2) { throw new Error(`Batch ${batchIndex + 1}: Malformed JSON. Try again.`); }
+      }
+
+      if (!Array.isArray(questions) || !questions.length)
+        throw new Error(`Batch ${batchIndex + 1}: Empty response.`);
+
+      return questions;
+    } catch (e) {
+      lastErr = e;
+      if (attempt === maxAttempts) throw e;
+      console.warn(`Batch ${batchIndex + 1} attempt ${attempt} failed (${e.message}); retrying.`);
+    }
   }
-
-  const text = result.text;
-  const match = text.match(/\[[\s\S]*\]/);
-  if (!match) throw new Error(`Batch ${batchIndex + 1}: Could not parse JSON response.`);
-
-  let questions;
-  try {
-    questions = JSON.parse(match[0]);
-  } catch(e) {
-    const lastBrace = match[0].lastIndexOf('}');
-    if (lastBrace === -1) throw new Error(`Batch ${batchIndex + 1}: Could not parse JSON.`);
-    try { questions = JSON.parse(match[0].slice(0, lastBrace + 1) + ']'); }
-    catch(e2) { throw new Error(`Batch ${batchIndex + 1}: Malformed JSON. Try again.`); }
-  }
-
-  if (!Array.isArray(questions) || !questions.length)
-    throw new Error(`Batch ${batchIndex + 1}: Empty response.`);
-
-  return questions;
+  throw lastErr; // unreachable, satisfies linters
 }
 
 // ── Top-level quiz orchestrator (handles single-pass + map-reduce) ────────────
@@ -1131,15 +1145,21 @@ async function generateQuizForChapter({
       const remaining = totalQuestions - allQuestions.length;
       const thisBatchSize = Math.min(batchSize, remaining);
       if (thisBatchSize <= 0) break;
-      const batch = await generateQuizBatch({
-        content, batchIndex: bi, totalBatches, batchSize: thisBatchSize,
-        questionType, chapterTitle,
-        previousQuestions: allQuestions,
-        allChapterQuestions, focusArea,
-        chunkCatalog: catalog.perChunk[0] || null,
-      });
-      allQuestions.push(...batch);
-      onBatch(batch, { chunkIndex: 0, totalChunks: 1, batchIndex: bi, totalBatches, pageRange: null });
+      try {
+        const batch = await generateQuizBatch({
+          content, batchIndex: bi, totalBatches, batchSize: thisBatchSize,
+          questionType, chapterTitle,
+          previousQuestions: allQuestions,
+          allChapterQuestions, focusArea,
+          chunkCatalog: catalog.perChunk[0] || null,
+        });
+        allQuestions.push(...batch);
+        onBatch(batch, { chunkIndex: 0, totalChunks: 1, batchIndex: bi, totalBatches, pageRange: null });
+      } catch (e) {
+        // Soft-fail: one bad batch shouldn't kill the whole run. Skip and continue.
+        console.warn(`Batch ${bi + 1} of ${totalBatches} failed: ${e.message}`);
+        onStatus({ phase: 'batch-warning', batchIndex: bi, totalBatches, error: e.message });
+      }
       if (bi < totalBatches - 1 && interBatchDelayMs > 0 && !shouldCancel()) {
         await new Promise(r => setTimeout(r, interBatchDelayMs));
       }
@@ -1173,25 +1193,36 @@ async function generateQuizForChapter({
         const remaining     = chunkQuota - producedThisChunk;
         const thisBatchSize = Math.min(batchSize, remaining);
         if (thisBatchSize <= 0) break;
-        const batch = await generateQuizBatch({
-          content:    chunk.content,
-          batchIndex: bi,
-          totalBatches: chunkBatches,
-          batchSize:  thisBatchSize,
-          questionType,
-          chapterTitle: chunkLabel,
-          previousQuestions: allQuestions,   // dedup against everything generated so far in this run
-          allChapterQuestions,
-          focusArea,
-          chunkCatalog: catalog.perChunk[ci] || null,
-        });
-        allQuestions.push(...batch);
-        producedThisChunk += batch.length;
-        onBatch(batch, {
-          chunkIndex: ci, totalChunks: chunks.length,
-          batchIndex: bi, totalBatches: chunkBatches,
-          pageRange: chunk.pageRange,
-        });
+        try {
+          const batch = await generateQuizBatch({
+            content:    chunk.content,
+            batchIndex: bi,
+            totalBatches: chunkBatches,
+            batchSize:  thisBatchSize,
+            questionType,
+            chapterTitle: chunkLabel,
+            previousQuestions: allQuestions,   // dedup against everything generated so far in this run
+            allChapterQuestions,
+            focusArea,
+            chunkCatalog: catalog.perChunk[ci] || null,
+          });
+          allQuestions.push(...batch);
+          producedThisChunk += batch.length;
+          onBatch(batch, {
+            chunkIndex: ci, totalChunks: chunks.length,
+            batchIndex: bi, totalBatches: chunkBatches,
+            pageRange: chunk.pageRange,
+          });
+        } catch (e) {
+          // Soft-fail: one bad batch shouldn't kill the run. Move on to the next.
+          console.warn(`Section ${ci + 1}/${chunks.length} batch ${bi + 1}/${chunkBatches} failed: ${e.message}`);
+          onStatus({
+            phase: 'batch-warning',
+            chunkIndex: ci, totalChunks: chunks.length,
+            batchIndex: bi, totalBatches: chunkBatches,
+            error: e.message,
+          });
+        }
         const moreToCome = bi < chunkBatches - 1 || ci < chunks.length - 1;
         if (moreToCome && interBatchDelayMs > 0 && !shouldCancel()) {
           await new Promise(r => setTimeout(r, interBatchDelayMs));
