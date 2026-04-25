@@ -30,6 +30,20 @@ function QuizTab({ course, onUpdate }) {
   const [collapsedBanks, setCollapsedBanks] = useQState(new Set());
   const cancelRef = useQRef(false);
 
+  // ── Keyboard shortcuts (must stay above any early return to keep hook order stable) ──
+  useQEffect(() => {
+    if (!session || session.done) return;
+    function handleKey(e) {
+      const tag = e.target?.tagName;
+      if (tag === 'TEXTAREA' || tag === 'INPUT') return;
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); navigate(-1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); navigate(1);  }
+      if (e.key === 'f' || e.key === 'F') toggleFlag();
+    }
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [session]);
+
   function toggleBank(chId) {
     setCollapsedBanks(prev => {
       const next = new Set(prev);
@@ -332,22 +346,6 @@ function QuizTab({ course, onUpdate }) {
       </div>
     );
   }
-
-  // ── Keyboard shortcuts ───────────────────────────────────────────────────
-  useQEffect(() => {
-    if (!session || session.done) return;
-    function handleKey(e) {
-      const tag = e.target?.tagName;
-      if (tag === 'TEXTAREA' || tag === 'INPUT') return;
-      const { idx, answers, questions: qs } = session;
-      const answered   = answers[idx];
-      if (e.key === 'ArrowLeft')  { e.preventDefault(); navigate(-1); }
-      if (e.key === 'ArrowRight') { e.preventDefault(); navigate(1);  }
-      if (e.key === 'f' || e.key === 'F') toggleFlag();
-    }
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [session]);
 
   // ── QUESTION screen ───────────────────────────────────────────────────────
   if (session) {
