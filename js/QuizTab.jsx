@@ -234,6 +234,10 @@ function QuizTab({ course, onUpdate }) {
         onStatus: (info) => {
           if (info.phase === 'chunked') {
             setGenState(prev => ({ ...prev, status: `Long chapter — processing in ${info.totalChunks} sections` }));
+          } else if (info.phase === 'catalog') {
+            const range = info.pageRange ? ` (pages ${info.pageRange.start}–${info.pageRange.end})` : '';
+            const which = info.totalChunks > 1 ? ` ${info.chunkIndex + 1} of ${info.totalChunks}` : '';
+            setGenState(prev => ({ ...prev, status: `Cataloging topics${which}${range}…` }));
           } else if (info.phase === 'chunk') {
             const range = info.pageRange ? `pages ${info.pageRange.start}–${info.pageRange.end}` : `section ${info.chunkIndex + 1}`;
             setGenState(prev => ({ ...prev, status: `Section ${info.chunkIndex + 1} of ${info.totalChunks} (${range})` }));

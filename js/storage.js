@@ -462,6 +462,41 @@ Return ONLY a valid JSON array — no markdown fences, no commentary, no preambl
 Example shape:
 [{"question":"...","choices":{"A":"...","B":"...","C":"...","D":"..."},"correct":"A","explanation":"...","qtype":"fact","topic":"Erie doctrine — substantive vs procedural"}]`;
 
+// ── Quiz catalog: stable system prompt for the topic-cataloging pass ──────────
+// Runs once per chunk before any batches. Output is a deterministic checklist
+// that gets fed into each batch's prompt so the quiz writer knows exactly what
+// must be tested. Treated as a quality signal, not source of truth — if it
+// fails, quiz generation still proceeds against the chapter content directly.
+const QUIZ_CATALOG_SYSTEM_PROMPT = `You are cataloging a section of a law school chapter for comprehensive quiz coverage. A separate quiz writer will use your output to ensure every distinct topic in this section gets tested. Under-cataloging means under-testing.
+
+═══ WHAT TO CATALOG ═══
+Every distinct topic that warrants its own quiz question. Be EXHAUSTIVE — err on the side of inclusion.
+
+Categories (use as the "type" field):
+  "case"      — every named court case (e.g. "Pennoyer v. Neff", "In re Gault")
+  "doctrine"  — every distinct legal test, standard, or doctrinal framework
+  "rule"      — every specific rule, statutory provision, or restatement section
+  "note"      — substantive note material that introduces new ideas (not mere editorial commentary)
+  "problem"   — assigned problems, hypotheticals, or questions posed by the textbook
+  "concept"   — anything else of substance that doesn't fit the above (policy debates, historical context with doctrinal significance, etc.)
+
+═══ IMPORTANCE ═══
+  "core"       — central to understanding this section; a quiz that omits this would be deficient
+  "supporting" — useful and worth testing, but secondary to the core material
+
+═══ INPUT NOISE TOLERANCE ═══
+The chapter section was copy-pasted from a PDF or e-textbook and may contain typos, broken spacing, run-together words, missing periods, mid-sentence section labels, and similar artifacts. Mentally normalize this noise — read for legal substance, not surface formatting. NEVER skip a topic because the surrounding text is poorly formatted: if the legal substance is recoverable from context, you must catalog it.
+
+═══ OUTPUT FORMAT ═══
+Return ONLY a valid JSON array — no markdown fences, no commentary, no preamble. Each topic object MUST have exactly these keys:
+
+  "topic":      string — short canonical label (e.g. "Erie doctrine — substantive vs procedural classification")
+  "type":       string — one of "case" | "doctrine" | "rule" | "note" | "problem" | "concept"
+  "importance": string — one of "core" | "supporting"
+
+Example shape:
+[{"topic":"Pennoyer v. Neff","type":"case","importance":"core"},{"topic":"Erie doctrine — substantive vs procedural classification","type":"doctrine","importance":"core"},{"topic":"Restatement (Second) § 351 — foreseeability","type":"rule","importance":"supporting"}]`;
+
 // ── Chunking for long chapters ────────────────────────────────────────────────
 // Split a chapter into chunks no larger than maxChunkChars, preferring to cut
 // at [Page N] boundaries (preserved by basicCleanContent). Falls back to
@@ -565,6 +600,109 @@ function allocateProportional(total, weights) {
   return floors;
 }
 
+// ── Topic catalog: per-chunk pass before batches ─────────────────────────────
+// Single API call. Reads the chunk content with extended thinking and emits a
+// JSON array of topics (case/doctrine/rule/note/problem/concept × core/supporting).
+// Returns a normalized array; empty array on parse failure (caller decides how to
+// handle that — generateQuizForChapter currently treats catalog absence as a soft
+// degradation, not a hard failure).
+async function buildChunkCatalog({ chunkContent, sectionLabel }) {
+  const userBlock =
+`Section: "${sectionLabel}"
+
+[Page N] markers indicate page breaks within this section.
+
+Section content:
+${chunkContent}
+
+Now produce the JSON array of every distinct topic in this section.`;
+
+  const result = await callClaudeRich({
+    system: [
+      { type: 'text', text: QUIZ_CATALOG_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+    ],
+    messages: [{
+      role: 'user',
+      content: [{ type: 'text', text: userBlock }],
+    }],
+    maxTokens: 16000,
+    thinking: { type: 'enabled', budget_tokens: 8000 },
+  });
+
+  if (result.stopReason === 'max_tokens') {
+    throw new Error(`Catalog for "${sectionLabel}" was truncated (hit max_tokens). Try again.`);
+  }
+
+  const match = result.text.match(/\[[\s\S]*\]/);
+  if (!match) throw new Error(`Catalog for "${sectionLabel}": could not parse JSON response.`);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(match[0]);
+  } catch(e) {
+    const lastBrace = match[0].lastIndexOf('}');
+    if (lastBrace === -1) throw new Error(`Catalog for "${sectionLabel}": malformed JSON.`);
+    try { parsed = JSON.parse(match[0].slice(0, lastBrace + 1) + ']'); }
+    catch(e2) { throw new Error(`Catalog for "${sectionLabel}": malformed JSON.`); }
+  }
+  if (!Array.isArray(parsed)) throw new Error(`Catalog for "${sectionLabel}": expected JSON array.`);
+
+  // Normalize and drop entries with empty topic strings.
+  return parsed
+    .map(t => ({
+      topic:      typeof t.topic === 'string' ? t.topic.trim() : '',
+      type:       typeof t.type === 'string' ? t.type.trim().toLowerCase() : 'concept',
+      importance: t.importance === 'supporting' ? 'supporting' : 'core',
+    }))
+    .filter(t => t.topic);
+}
+
+// Run buildChunkCatalog over each chunk sequentially. Returns
+// { perChunk: [array per chunk], failures: [{chunkIndex, error}] }.
+// Catalog failures don't block — generateQuizForChapter just proceeds without
+// the catalog signal for the affected chunk.
+async function buildChapterCatalog({
+  chunks, chapterTitle,
+  shouldCancel = () => false,
+  onStatus     = () => {},
+}) {
+  const perChunk = [];
+  const failures = [];
+  for (let ci = 0; ci < chunks.length; ci++) {
+    if (shouldCancel()) break;
+    const chunk = chunks[ci];
+    const sectionLabel = chunk.pageRange
+      ? `${chapterTitle} (pages ${chunk.pageRange.start}–${chunk.pageRange.end})`
+      : (chunks.length > 1 ? `${chapterTitle} (section ${ci + 1} of ${chunks.length})` : chapterTitle);
+
+    onStatus({
+      phase: 'catalog',
+      chunkIndex: ci, totalChunks: chunks.length,
+      pageRange: chunk.pageRange,
+    });
+
+    try {
+      const topics = await buildChunkCatalog({ chunkContent: chunk.content, sectionLabel });
+      perChunk.push(topics);
+    } catch (e) {
+      console.warn(`Catalog failed for chunk ${ci} of "${chapterTitle}":`, e.message);
+      perChunk.push([]);
+      failures.push({ chunkIndex: ci, error: e.message });
+    }
+  }
+  return { perChunk, failures };
+}
+
+// Format a chunk's catalog as a checklist string for injection into the batch
+// prompt. Returns null when the catalog is empty so the prompt can omit the
+// section entirely.
+function formatCatalogForPrompt(catalog) {
+  if (!catalog || catalog.length === 0) return null;
+  return catalog
+    .map((t, i) => `${i + 1}. [${t.type}, ${t.importance}] ${t.topic}`)
+    .join('\n');
+}
+
 // ── Quiz batch generation (rigorous, coverage-mandated) ───────────────────────
 // Generates ONE batch against the supplied content. Callers responsible for
 // keeping content under QUIZ_MAX_SINGLE_PASS_CHARS — generateQuizForChapter
@@ -572,6 +710,7 @@ function allocateProportional(total, weights) {
 async function generateQuizBatch({
   content, batchIndex, totalBatches, batchSize, questionType, chapterTitle,
   previousQuestions = [], allChapterQuestions = [], focusArea = '',
+  chunkCatalog = null,   // optional: array of {topic, type, importance} for this chunk
 }) {
   const typeInstruction = {
     fact:        `Generate ${batchSize} FACT-BASED questions. Each must test specific rules, legal standards, case holdings, statutory elements, or doctrinal definitions. Tag each with "qtype":"fact".`,
@@ -610,11 +749,20 @@ The student has requested that questions focus specifically on: "${focusArea.tri
 Chapter content:
 ${content}`;
 
+  const catalogList = formatCatalogForPrompt(chunkCatalog);
+  const catalogBlock = catalogList
+    ? `═══ TOPIC CHECKLIST FOR THIS SECTION — every topic must be tested across the run ═══
+A separate cataloging pass identified these topics in this section. Use this list as your authoritative coverage checklist alongside the chapter content. The "ALREADY COVERED" list below tells you which topics are already done; pick from this checklist for the rest. If you discover a substantive topic missing from the checklist, still test it — the checklist is a floor, not a ceiling.
+
+${catalogList}
+`
+    : '';
+
   // Fresh block: per-batch state. Changes every call, so not cached.
   const batchBlock =
 `${batchNote}
 ${focusInstruction}
-═══ THIS BATCH ═══
+${catalogBlock}═══ THIS BATCH ═══
 ${typeInstruction}
 
 ${coveredItems
@@ -689,6 +837,16 @@ async function generateQuizForChapter({
   const chunks = chunkChapter(content);
   const allQuestions = [];
 
+  // Catalog phase — runs for every chapter (single- or multi-chunk). Soft signal:
+  // failures are logged and the affected chunk just runs without the checklist.
+  if (chunks.length > 1) {
+    onStatus({ phase: 'chunked', totalChunks: chunks.length });
+  }
+  const catalog = await buildChapterCatalog({
+    chunks, chapterTitle, shouldCancel, onStatus,
+  });
+  if (shouldCancel()) return allQuestions;
+
   // Single-pass mode — chapter fits in one chunk.
   if (chunks.length === 1) {
     onStatus({ phase: 'single' });
@@ -703,6 +861,7 @@ async function generateQuizForChapter({
         questionType, chapterTitle,
         previousQuestions: allQuestions,
         allChapterQuestions, focusArea,
+        chunkCatalog: catalog.perChunk[0] || null,
       });
       allQuestions.push(...batch);
       onBatch(batch, { chunkIndex: 0, totalChunks: 1, batchIndex: bi, totalBatches, pageRange: null });
@@ -714,7 +873,6 @@ async function generateQuizForChapter({
   }
 
   // Map-reduce mode — chapter is chunked.
-  onStatus({ phase: 'chunked', totalChunks: chunks.length });
   const allocations = allocateProportional(
     totalQuestions,
     chunks.map(c => c.charCount),
@@ -753,6 +911,7 @@ async function generateQuizForChapter({
         previousQuestions: allQuestions,   // dedup against everything generated so far in this run
         allChapterQuestions,
         focusArea,
+        chunkCatalog: catalog.perChunk[ci] || null,
       });
       allQuestions.push(...batch);
       producedThisChunk += batch.length;
@@ -998,6 +1157,7 @@ window.LexStore = {
   extractCasesFromContent,
   generateQuizBatch,
   generateQuizForChapter,
+  buildChunkCatalog, buildChapterCatalog,
   chunkChapter,
   generateBriefsHTML,
   generateMissReportHTML,
