@@ -419,6 +419,12 @@ function qKey(q) { return (q.question || '').slice(0, 100).trim(); }
 const QUIZ_MAX_SINGLE_PASS_CHARS = 80000;
 const QUIZ_MAX_CHUNK_CHARS       = 80000;
 
+// Cross-section synthesis is capped at ~25% of the user's requested question
+// count. Below 4 requested questions the cap floors at 1; the cap is skipped
+// entirely if no genuine pairings exist (synthesis returns the model's smaller
+// number when warranted).
+const QUIZ_SYNTHESIS_CC_RATIO    = 0.25;
+
 // ── Quiz generation: stable system prompt (cached across batches and runs) ────
 // Chapter-agnostic, run-agnostic. Per-run stuff (chapter title, focus area,
 // batch number, covered topics) is assembled into the user message instead.
@@ -780,6 +786,7 @@ function formatCatalogForPrompt(catalog) {
 async function generateCrossSectionSynthesis({
   chunks, perChunkCatalogs, generatedQuestions,
   chapterTitle, focusArea = '',
+  synthesisCap = 5,
 }) {
   // Need at least 2 sections with non-empty catalogs to have anything to contrast.
   const sections = perChunkCatalogs
@@ -826,7 +833,7 @@ ${anchorsText || '(none yet)'}
 • Each question MUST reference content from at least TWO different sections above. Surface that pairing in the question stem (e.g. "Compare the rule from Section 'pages 18–34' with the rule from Section 'pages 60–88' …").
 • Identify GENUINE doctrinal pairings: same doctrine treated differently in two cases, two rules in tension, a doctrine evolving across the chapter, a holding revisited or distinguished by a later case, etc.
 • If the chapter doesn't genuinely support cross-section compare/contrast (e.g. each section covers an unrelated topic), output a SMALL number rather than fabricate forced or shallow comparisons. Quality over quantity.
-• There is NO upper limit. Produce one question per genuine pairing you identify — if there are 15 substantive cross-section pairings, write 15 questions. Under-using compare/contrast on a chapter rich in pairings is a quality failure.
+• HARD CAP: produce AT MOST ${synthesisCap} compare/contrast question${synthesisCap === 1 ? '' : 's'}. If you identify more than ${synthesisCap} genuine pairings, choose only the ${synthesisCap} highest-quality ones — the ones that test the deepest doctrinal contrast or evolution. Do NOT produce more than ${synthesisCap}. If fewer than ${synthesisCap} substantive pairings exist, produce fewer.
 • Apply the same anti-copying rules from the system prompt to any application-style fact patterns within compare/contrast questions.
 • All other quality rules from the system prompt apply (one clearly correct answer, plausible distractors, 3-5 sentence explanation citing the source).
 
@@ -930,7 +937,7 @@ Now produce the JSON.`;
       role: 'user',
       content: [{ type: 'text', text: userBlock }],
     }],
-    maxTokens: 16000,
+    maxTokens: 32000,
     thinking: { type: 'enabled', budget_tokens: 8000 },
   });
 
@@ -1236,23 +1243,30 @@ async function generateQuizForChapter({
   // would just be normal compare/contrast handled inside generateQuizBatch).
   if (!shouldCancel() && chunks.length > 1) {
     onStatus({ phase: 'synthesis', totalChunks: chunks.length });
+    const synthesisCap = Math.max(1, Math.round(totalQuestions * QUIZ_SYNTHESIS_CC_RATIO));
     try {
       const ccQuestions = await generateCrossSectionSynthesis({
         chunks,
         perChunkCatalogs:   catalog.perChunk,
         generatedQuestions: allQuestions,
         chapterTitle, focusArea,
+        synthesisCap,
       });
-      if (ccQuestions.length > 0) {
-        allQuestions.push(...ccQuestions);
-        onBatch(ccQuestions, {
+      // Belt-and-suspenders: hard-trim if the model exceeded the cap despite the prompt.
+      const trimmed = ccQuestions.slice(0, synthesisCap);
+      if (trimmed.length > 0) {
+        allQuestions.push(...trimmed);
+        onBatch(trimmed, {
           phase: 'synthesis',
           chunkIndex: -1, totalChunks: chunks.length,
           batchIndex: 0, totalBatches: 1,
           pageRange: null,
         });
       }
-      onStatus({ phase: 'synthesis-done', questionCount: ccQuestions.length });
+      onStatus({ phase: 'synthesis-done', questionCount: trimmed.length, cap: synthesisCap });
+      // Brief pause so the synthesis result is readable before the audit phase
+      // overwrites the status line. Pure UX delay; doesn't affect output.
+      if (!shouldCancel()) await new Promise(r => setTimeout(r, 1500));
     } catch (e) {
       console.warn(`Cross-section synthesis failed for "${chapterTitle}":`, e.message);
       onStatus({ phase: 'synthesis-warning', error: e.message });
