@@ -23,7 +23,7 @@ function QuizTab({ course, onUpdate }) {
   const [chDropOpen, setChDropOpen] = useQState(false);
   const [settings,   setSettings]   = useQState({ count: 20, type: 'mix', focusArea: '' });
   const [genState,   setGenState]   = useQState(null); // { total, done, error, status }
-  const [genReport,  setGenReport]  = useQState(null); // { setId, chId, factCount, appCount }
+  const [genReport,  setGenReport]  = useQState(null); // { setId, chId, factCount, appCount, ccCount }
   // Active quiz session
   const [session,    setSession]    = useQState(null);
   // { chId, setId, questions, idx, answers:{}, flaggedKeys:[], sessionStart }
@@ -241,6 +241,8 @@ function QuizTab({ course, onUpdate }) {
           } else if (info.phase === 'chunk') {
             const range = info.pageRange ? `pages ${info.pageRange.start}–${info.pageRange.end}` : `section ${info.chunkIndex + 1}`;
             setGenState(prev => ({ ...prev, status: `Section ${info.chunkIndex + 1} of ${info.totalChunks} (${range})` }));
+          } else if (info.phase === 'synthesis') {
+            setGenState(prev => ({ ...prev, status: 'Cross-section compare/contrast pass…' }));
           }
         },
         onBatch: (_batch, _info) => {
@@ -251,9 +253,12 @@ function QuizTab({ course, onUpdate }) {
 
       if (cancelRef.current && newQs.length < 2) { setGenState(null); return; }
 
-      const final = newQs.slice(0, count);
+      // Synthesis pass intentionally adds compare/contrast questions beyond the
+      // requested count (per "no upper limit on compare/contrast"), so don't truncate.
+      const final = newQs;
       const factCount = final.filter(q => q.qtype === 'fact').length;
       const appCount  = final.filter(q => q.qtype === 'application').length;
+      const ccCount   = final.filter(q => q.qtype === 'compare-contrast').length;
 
       // Build new set label
       const existingSets = quizData[selChapter]?.sets || [];
@@ -265,7 +270,7 @@ function QuizTab({ course, onUpdate }) {
         questions: final,
         settings: { count: final.length, type: settings.type },
         generatedAt: Date.now(),
-        summary: { factCount, appCount, total: final.length },
+        summary: { factCount, appCount, ccCount, total: final.length },
         progress: null,
         wrongBank: {}, flagged: [], sessions: [],
       };
@@ -279,7 +284,7 @@ function QuizTab({ course, onUpdate }) {
       });
 
       setGenState(null);
-      setGenReport({ setId: newSetId, chId: selChapter, factCount, appCount, total: final.length, label });
+      setGenReport({ setId: newSetId, chId: selChapter, factCount, appCount, ccCount, total: final.length, label });
     } catch (err) {
       setGenState(prev => ({ ...prev, error: err.message || 'Generation failed.' }));
     }
@@ -317,10 +322,12 @@ function QuizTab({ course, onUpdate }) {
     const wrongKeys  = questions.map((q, i) => answers[i] !== q.correct ? qKey(q) : null).filter(Boolean);
     const set        = (quizData[chId]?.sets || []).find(s => s.id === setId);
     const wrongCount = Object.keys(set?.wrongBank || {}).length;
-    const factRight  = questions.filter((q, i) => q.qtype === 'fact'        && answers[i] === q.correct).length;
+    const factRight  = questions.filter((q, i) => q.qtype === 'fact'             && answers[i] === q.correct).length;
     const factTotal  = questions.filter(q => q.qtype === 'fact').length;
-    const appRight   = questions.filter((q, i) => q.qtype === 'application' && answers[i] === q.correct).length;
+    const appRight   = questions.filter((q, i) => q.qtype === 'application'      && answers[i] === q.correct).length;
     const appTotal   = questions.filter(q => q.qtype === 'application').length;
+    const ccRight    = questions.filter((q, i) => q.qtype === 'compare-contrast' && answers[i] === q.correct).length;
+    const ccTotal    = questions.filter(q => q.qtype === 'compare-contrast').length;
 
     return (
       <div style={qS.wrap}>
@@ -330,10 +337,11 @@ function QuizTab({ course, onUpdate }) {
           <div style={qS.scoreBig}>{score}<span style={qS.scoreOf}>/{total}</span></div>
           <div style={{ ...qS.scoreGrade, color: gCol }}>{grade} — {pct}%</div>
 
-          {(factTotal > 0 || appTotal > 0) && (
+          {(factTotal > 0 || appTotal > 0 || ccTotal > 0) && (
             <div style={qS.scoreBreakdown}>
               {factTotal > 0 && <div style={qS.breakdownRow}><span style={qS.breakdownLabel}>Fact-Based</span><span style={qS.breakdownVal}>{factRight}/{factTotal} ({Math.round(factRight/factTotal*100)}%)</span></div>}
               {appTotal  > 0 && <div style={qS.breakdownRow}><span style={qS.breakdownLabel}>Application</span><span style={qS.breakdownVal}>{appRight}/{appTotal} ({Math.round(appRight/appTotal*100)}%)</span></div>}
+              {ccTotal   > 0 && <div style={qS.breakdownRow}><span style={qS.breakdownLabel}>Compare/Contrast</span><span style={qS.breakdownVal}>{ccRight}/{ccTotal} ({Math.round(ccRight/ccTotal*100)}%)</span></div>}
             </div>
           )}
 
@@ -392,7 +400,12 @@ function QuizTab({ course, onUpdate }) {
             <div style={qS.qMeta}>
               <button style={qS.navBtnSm} onClick={() => navigate(-1)} disabled={idx === 0}>← Prev</button>
               <span style={qS.qNum}>Q{idx + 1} <span style={{fontWeight:400,opacity:0.5}}>of {questions.length}</span></span>
-              {q.qtype && <span style={{ ...qS.qtypePill, background: q.qtype === 'application' ? '#EFF6FF' : '#FDF3E0', color: q.qtype === 'application' ? '#1E40AF' : '#8B5E00' }}>{q.qtype === 'application' ? 'Application' : 'Fact-Based'}</span>}
+              {q.qtype && (() => {
+                const cfg = q.qtype === 'application'      ? { bg:'#EFF6FF', fg:'#1E40AF', label:'Application' }
+                          : q.qtype === 'compare-contrast' ? { bg:'#F3EAFB', fg:'#5B21B6', label:'Compare/Contrast' }
+                          :                                  { bg:'#FDF3E0', fg:'#8B5E00', label:'Fact-Based' };
+                return <span style={{ ...qS.qtypePill, background: cfg.bg, color: cfg.fg }}>{cfg.label}</span>;
+              })()}
             </div>
             <div style={{display:'flex',alignItems:'center',gap:8}}>
               {modeLabel && <span style={qS.modePill}>{modeLabel}</span>}
@@ -468,7 +481,7 @@ function QuizTab({ course, onUpdate }) {
         <div style={qS.genReportBar}>
           <div>
             <span style={qS.genReportTitle}>✓ {genReport.label} generated — {genReport.total} questions</span>
-            <span style={qS.genReportDetail}> · {genReport.factCount} fact-based · {genReport.appCount} application</span>
+            <span style={qS.genReportDetail}> · {genReport.factCount} fact-based · {genReport.appCount} application{genReport.ccCount ? ` · ${genReport.ccCount} compare/contrast` : ''}</span>
           </div>
           <div style={{ display:'flex', gap:8 }}>
             <button style={qS.btnPrimary} onClick={() => startSession(genReport.chId, genReport.setId)}>Start Quiz →</button>
