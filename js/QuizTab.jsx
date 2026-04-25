@@ -23,7 +23,7 @@ function QuizTab({ course, onUpdate }) {
   const [chDropOpen, setChDropOpen] = useQState(false);
   const [settings,   setSettings]   = useQState({ count: 20, type: 'mix', focusArea: '' });
   const [genState,   setGenState]   = useQState(null); // { total, done, error, status }
-  const [genReport,  setGenReport]  = useQState(null); // { setId, chId, factCount, appCount, ccCount }
+  const [genReport,  setGenReport]  = useQState(null); // { setId, chId, factCount, appCount, ccCount, warnings }
   // Active quiz session
   const [session,    setSession]    = useQState(null);
   // { chId, setId, questions, idx, answers:{}, flaggedKeys:[], sessionStart }
