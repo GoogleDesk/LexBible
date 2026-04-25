@@ -1,15 +1,58 @@
 // App — root component, state management, tweaks
-const { useState: useAppState, useEffect: useAppEffect } = React;
+const { useState: useAppState, useEffect: useAppEffect, useRef: useAppRef } = React;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{"sidebarWidth":"232","accentColor":"#2A6049","bodyFont":"Lora"}/*EDITMODE-END*/;
 
+const VALID_TABS = ['textbook', 'quizzes', 'briefs'];
+
+function readUrlPath() {
+  const parts = window.location.pathname.split('/').filter(Boolean);
+  return { courseId: parts[0] || null, tab: parts[1] || null };
+}
+
 function App() {
-  const [data,         setData]         = useAppState(() => window.LexStore.loadData());
-  const [activeCourse, setActiveCourse] = useAppState('civil-procedure');
+  const [data, setData] = useAppState(() => window.LexStore.loadData());
+
+  // Resolve initial course/tab from the URL, falling back to defaults
+  const initialRoute = (() => {
+    const { courseId, tab } = readUrlPath();
+    const courseExists = courseId && data.courses && data.courses[courseId];
+    return {
+      activeCourse: courseExists ? courseId : 'civil-procedure',
+      tab: VALID_TABS.includes(tab) ? tab : 'textbook',
+    };
+  })();
+
+  const [activeCourse, setActiveCourse] = useAppState(initialRoute.activeCourse);
+  const [tab,          setTab]          = useAppState(initialRoute.tab);
   const [tweaksOn,     setTweaksOn]     = useAppState(false);
   const [tweaks,       setTweaks]       = useAppState(TWEAK_DEFAULTS);
+  const firstUrlSyncRef = useAppRef(true);
 
   useAppEffect(() => { window.LexStore.saveData(data); }, [data]);
+
+  // Keep the URL bar in sync with state. First sync uses replaceState so we
+  // don't add an extra history entry; subsequent state changes use pushState
+  // so back/forward works.
+  useAppEffect(() => {
+    const desired = `/${activeCourse}/${tab}`;
+    if (window.location.pathname !== desired) {
+      if (firstUrlSyncRef.current) window.history.replaceState(null, '', desired);
+      else                         window.history.pushState(null, '', desired);
+    }
+    firstUrlSyncRef.current = false;
+  }, [activeCourse, tab]);
+
+  // Browser back/forward → re-read URL into state.
+  useAppEffect(() => {
+    function onPop() {
+      const { courseId, tab: newTab } = readUrlPath();
+      if (courseId && data.courses[courseId]) setActiveCourse(courseId);
+      if (VALID_TABS.includes(newTab))         setTab(newTab);
+    }
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [data.courses]);
 
   useAppEffect(() => {
     const handler = e => {
@@ -94,6 +137,8 @@ function App() {
         <CourseView
           course={activeCourseData}
           onUpdate={updates => updateCourse(activeCourse, updates)}
+          tab={tab}
+          onTabChange={setTab}
         />
       )}
 

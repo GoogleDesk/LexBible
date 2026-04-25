@@ -8,14 +8,13 @@ const TABS = [
 ];
 
 const { useRef: useCVRef } = React;
-function CourseView({ course, onUpdate }) {
-  const [tab, setTab] = useCVState('textbook');
+function CourseView({ course, onUpdate, tab, onTabChange }) {
   const [headerActions, setHeaderActions] = useCVState({});
   const [pendingCase, setPendingCase] = useCVState(null);
 
   function navigateToCase(caseName) {
     setPendingCase(caseName);
-    setTab('briefs');
+    onTabChange('briefs');
   }
 
   return (
@@ -44,7 +43,7 @@ function CourseView({ course, onUpdate }) {
             <button
               key={t.id}
               style={{ ...cvS.tab, ...(tab === t.id ? cvS.tabActive : {}) }}
-              onClick={() => setTab(t.id)}
+              onClick={() => onTabChange(t.id)}
             >
               {t.label}
             </button>
