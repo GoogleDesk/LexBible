@@ -1,5 +1,5 @@
 // App — root component, state management, tweaks
-const { useState: useAppState, useEffect: useAppEffect } = React;
+const { useState: useAppState, useEffect: useAppEffect, useRef: useAppRef } = React;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{"sidebarWidth":"232","accentColor":"#2A6049","bodyFont":"Lora"}/*EDITMODE-END*/;
 
@@ -32,6 +32,11 @@ function App() {
   const [tweaksOn,     setTweaksOn]     = useAppState(false);
   const [tweaks,       setTweaks]       = useAppState(TWEAK_DEFAULTS);
 
+  // True until the URL-sync effect has run once after data first loaded.
+  // Lets that effect use replaceState (instead of pushState) for the initial
+  // sync, so a deep link doesn't get a stray history entry on top of itself.
+  const initialUrlSyncRef = useAppRef(true);
+
   // Subscribe to Supabase auth state
   useAppEffect(() => {
     if (!supabase) { setAuthReady(true); return; }
@@ -45,7 +50,10 @@ function App() {
     return () => sub.subscription.unsubscribe();
   }, [supabase]);
 
-  // When we have a session, initialize cloud sync and load the user's data
+  // When we have a session, initialize cloud sync and load the user's data.
+  // Hydrating activeCourse/activeTab from the URL happens here, in the same
+  // batch as setData/setDataReady, so the first render that shows the app
+  // already reflects the deep link — no flash of the default course/tab.
   useAppEffect(() => {
     if (!supabase || !session) { setDataReady(false); setData(null); return; }
     let cancelled = false;
@@ -54,7 +62,22 @@ function App() {
       try {
         await window.LexStore.initCloud(supabase, session.user.id);
         if (cancelled) return;
-        setData(window.LexStore.loadData());
+        const loaded = window.LexStore.loadData();
+
+        const all = [
+          ...window.LexStore.DEFAULT_COURSES,
+          ...(loaded.customCourses || []),
+        ];
+        const { idBySlug } = window.LexRouting.buildSlugMap(all);
+        const parsed = window.LexRouting.parseLocation();
+        const matched = parsed.slug ? idBySlug.get(parsed.slug) : null;
+        const courseId = matched || window.LexRouting.DEFAULT_COURSE_ID;
+        const tab      = parsed.tab || window.LexRouting.DEFAULT_TAB;
+
+        initialUrlSyncRef.current = true;
+        setActiveCourse(courseId);
+        setActiveTab(tab);
+        setData(loaded);
         setDataReady(true);
       } catch (err) {
         if (cancelled) return;
@@ -77,26 +100,9 @@ function App() {
     return () => window.removeEventListener('beforeunload', onUnload);
   }, []);
 
-  // ── URL routing: hydrate state from URL once data loads, then keep URL in sync
-  useAppEffect(() => {
-    if (!dataReady || !data) return;
-    const all = [
-      ...window.LexStore.DEFAULT_COURSES,
-      ...(data.customCourses || []),
-    ];
-    const { idBySlug } = window.LexRouting.buildSlugMap(all);
-    const parsed = window.LexRouting.parseLocation();
-    const courseId = parsed.slug && idBySlug.get(parsed.slug);
-    if (courseId) setActiveCourse(courseId);
-    if (parsed.tab) setActiveTab(parsed.tab);
-    // If the URL pointed to a missing course, normalize it without adding a history entry
-    if (parsed.slug && !courseId) {
-      const slug = window.LexRouting.buildSlugMap(all).slugById.get(window.LexRouting.DEFAULT_COURSE_ID);
-      window.history.replaceState(null, '', window.LexRouting.buildPath(slug, window.LexRouting.DEFAULT_TAB));
-    }
-  }, [dataReady]); // intentional: hydrate once when data first becomes ready
-
-  // Push state→URL whenever the user navigates inside the app
+  // Keep URL in sync with state. The first run after data loads uses
+  // replaceState, so a stale URL (e.g. "/" or an unknown slug) gets normalized
+  // without adding a history entry on top of where the user landed.
   useAppEffect(() => {
     if (!dataReady || !data || !activeCourse) return;
     const all = [
@@ -108,8 +114,10 @@ function App() {
     if (!slug) return;
     const newPath = window.LexRouting.buildPath(slug, activeTab);
     if (window.location.pathname !== newPath) {
-      window.history.pushState(null, '', newPath);
+      if (initialUrlSyncRef.current) window.history.replaceState(null, '', newPath);
+      else                           window.history.pushState(null, '', newPath);
     }
+    initialUrlSyncRef.current = false;
   }, [activeCourse, activeTab, dataReady, data]);
 
   // Browser back/forward
