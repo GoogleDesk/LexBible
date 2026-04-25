@@ -5,7 +5,7 @@ function fmtTitle(t) {
 }
 // QuizTab — full quiz system v3: navigation, progress save, multi-quiz per chapter,
 // wrong tracker, stats, flags, miss report, question type report, delete quizzes
-const { useState: useQState, useRef: useQRef, useEffect: useQEffect } = React;
+const { useState: useQState, useRef: useQRef, useEffect: useQEffect, useMemo: useQMemo } = React;
 
 const QUIZ_TYPES = [
   { value: 'fact',        label: 'Fact-Based',  desc: 'Rules, holdings, definitions'  },
@@ -220,6 +220,11 @@ function QuizTab({ course, onUpdate }) {
     setGenState({ total: count, done: 0, error: null, status: '' });
 
     let newQs = [];
+    // Closure state: warnings collected over the run, plus the current chunk
+    // header so onBatch can append " · Batch N/M" without losing the section label.
+    const warnings = [];
+    let topicsCataloged = 0;
+    let chunkHeader = '';
     try {
       newQs = await window.LexStore.generateQuizForChapter({
         content:      ch.content,
@@ -238,16 +243,38 @@ function QuizTab({ course, onUpdate }) {
             const range = info.pageRange ? ` (pages ${info.pageRange.start}–${info.pageRange.end})` : '';
             const which = info.totalChunks > 1 ? ` ${info.chunkIndex + 1} of ${info.totalChunks}` : '';
             setGenState(prev => ({ ...prev, status: `Cataloging topics${which}${range}…` }));
+          } else if (info.phase === 'catalog-done') {
+            topicsCataloged += info.topicCount || 0;
+            const which = info.totalChunks > 1 ? `Section ${info.chunkIndex + 1}/${info.totalChunks}` : 'Catalog';
+            setGenState(prev => ({ ...prev, status: `${which}: cataloged ${info.topicCount} topics (${topicsCataloged} so far)` }));
+          } else if (info.phase === 'catalog-warning') {
+            warnings.push(`Catalog failed for section ${info.chunkIndex + 1}: ${info.error}`);
           } else if (info.phase === 'chunk') {
             const range = info.pageRange ? `pages ${info.pageRange.start}–${info.pageRange.end}` : `section ${info.chunkIndex + 1}`;
-            setGenState(prev => ({ ...prev, status: `Section ${info.chunkIndex + 1} of ${info.totalChunks} (${range})` }));
+            chunkHeader = `Section ${info.chunkIndex + 1} of ${info.totalChunks} (${range})`;
+            setGenState(prev => ({ ...prev, status: chunkHeader }));
           } else if (info.phase === 'synthesis') {
+            chunkHeader = '';
             setGenState(prev => ({ ...prev, status: 'Cross-section compare/contrast pass…' }));
+          } else if (info.phase === 'synthesis-done') {
+            const msg = info.questionCount > 0
+              ? `Synthesis added ${info.questionCount} compare/contrast question${info.questionCount === 1 ? '' : 's'}`
+              : 'Synthesis found no cross-section pairings';
+            setGenState(prev => ({ ...prev, status: msg }));
+          } else if (info.phase === 'synthesis-warning') {
+            warnings.push(`Cross-section synthesis failed: ${info.error}`);
           }
         },
-        onBatch: (_batch, _info) => {
-          // Re-read latest count from the closure-captured array via setGenState callback
-          setGenState(prev => prev && ({ ...prev, done: Math.min((prev.done || 0) + _batch.length, count) }));
+        onBatch: (_batch, info) => {
+          setGenState(prev => {
+            if (!prev) return prev;
+            const done = Math.min((prev.done || 0) + _batch.length, count);
+            // Within a chunk, append " · Batch N/M" sub-progress.
+            const status = (chunkHeader && info && info.totalBatches > 1 && info.phase !== 'synthesis')
+              ? `${chunkHeader} · Batch ${info.batchIndex + 1}/${info.totalBatches}`
+              : prev.status;
+            return { ...prev, done, status };
+          });
         },
       });
 
@@ -284,7 +311,7 @@ function QuizTab({ course, onUpdate }) {
       });
 
       setGenState(null);
-      setGenReport({ setId: newSetId, chId: selChapter, factCount, appCount, ccCount, total: final.length, label });
+      setGenReport({ setId: newSetId, chId: selChapter, factCount, appCount, ccCount, total: final.length, label, warnings });
     } catch (err) {
       setGenState(prev => ({ ...prev, error: err.message || 'Generation failed.' }));
     }
@@ -479,9 +506,16 @@ function QuizTab({ course, onUpdate }) {
       {/* Post-generation report */}
       {genReport && (
         <div style={qS.genReportBar}>
-          <div>
-            <span style={qS.genReportTitle}>✓ {genReport.label} generated — {genReport.total} questions</span>
-            <span style={qS.genReportDetail}> · {genReport.factCount} fact-based · {genReport.appCount} application{genReport.ccCount ? ` · ${genReport.ccCount} compare/contrast` : ''}</span>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div>
+              <span style={qS.genReportTitle}>✓ {genReport.label} generated — {genReport.total} questions</span>
+              <span style={qS.genReportDetail}> · {genReport.factCount} fact-based · {genReport.appCount} application{genReport.ccCount ? ` · ${genReport.ccCount} compare/contrast` : ''}</span>
+            </div>
+            {genReport.warnings && genReport.warnings.length > 0 && (
+              <div style={qS.genReportWarn}>
+                ⚠ {genReport.warnings.length} non-fatal issue{genReport.warnings.length === 1 ? '' : 's'}: {genReport.warnings.join(' · ')}
+              </div>
+            )}
           </div>
           <div style={{ display:'flex', gap:8 }}>
             <button style={qS.btnPrimary} onClick={() => startSession(genReport.chId, genReport.setId)}>Start Quiz →</button>
@@ -580,6 +614,22 @@ function QuizTab({ course, onUpdate }) {
 function QuizSetupCard({ chapters, quizData, selChapter, setSelChapter, chDropOpen, setChDropOpen, settings, setSettings, hasApiKey, maxQ, generate, genReport, setGenReport, startSession }) {
   const [focusOpen, setFocusOpen] = useQState(false);
 
+  // Compute chunking preview when an oversize chapter is selected.
+  // Pure string-splitting; cheap, but memoized to avoid re-running on every keystroke.
+  const chunkPreview = useQMemo(() => {
+    if (!selChapter) return null;
+    const ch = chapters.find(c => c.id === selChapter);
+    if (!ch || !ch.content) return null;
+    const chunks = window.LexStore.chunkChapter(ch.content);
+    if (chunks.length <= 1) return null;
+    return {
+      count: chunks.length,
+      sections: chunks.map(c => c.pageRange
+        ? `pages ${c.pageRange.start}–${c.pageRange.end}`
+        : `section ${c.index + 1}`),
+    };
+  }, [selChapter, chapters]);
+
   return (
     <div style={qS.setupCard}>
       <div style={qS.setupTitle}>Generate a New Quiz</div>
@@ -620,6 +670,11 @@ function QuizSetupCard({ chapters, quizData, selChapter, setSelChapter, chDropOp
             </div>
           )}
         </div>
+        {chunkPreview && (
+          <div style={qS.chunkPreview}>
+            ⓘ Long chapter — will be processed in {chunkPreview.count} sections ({chunkPreview.sections.join(', ')}) with a topic catalog per section and a final cross-section compare/contrast pass.
+          </div>
+        )}
       </div>
 
       {/* Row 2: Count + Type inline */}
@@ -802,7 +857,9 @@ const qS = {
   genReportBar:{ display:'flex', alignItems:'center', justifyContent:'space-between', background:'#EFF8F1', border:'1px solid #86EFAC', borderRadius:8, padding:'11px 18px', marginBottom:16, maxWidth:860, flexWrap:'wrap', gap:10 },
   genReportTitle:{ fontSize:13.5, fontWeight:600, color:'#14532D' },
   genReportDetail:{ fontSize:12.5, color:'#166534' },
+  genReportWarn:{ marginTop:5, fontSize:11.5, color:'#8B5E00', lineHeight:1.5 },
   apiWarning:{ padding:'10px 14px', background:'#FDF3E0', border:'1px solid #E8D5A0', borderRadius:6, fontSize:12.5, color:'#8B5E00', marginBottom:18, lineHeight:1.55 },
+  chunkPreview:{ padding:'10px 14px', background:'#F3EAFB', border:'1px solid #C4B5E0', borderRadius:6, fontSize:12.5, color:'#5B21B6', marginTop:10, marginBottom:6, lineHeight:1.55 },
   // Setup
   setupCard:  { background:'white', borderRadius:12, border:'1px solid #E2D9CC', padding:28, maxWidth:860, boxShadow:'0 2px 14px rgba(26,39,68,.06)', marginBottom:24 },
   setupTitle: { fontFamily:'"Lora", "Lora", Georgia, serif', fontSize:20, fontWeight:700, color:'#1A1714', marginBottom:18 },
