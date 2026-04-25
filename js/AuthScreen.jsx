@@ -32,7 +32,8 @@ function AuthScreen({ supabase }) {
     try {
       const { error } = await supabase.auth.signInWithOtp({
         email: clean,
-        options: { emailRedirectTo: window.location.origin + window.location.pathname },
+        // Always land on site root after sign-in; routing then takes over.
+        options: { emailRedirectTo: window.location.origin + '/' },
       });
       if (error) throw error;
       setPhase('sent');

@@ -8,8 +8,9 @@ const TABS = [
 ];
 
 const { useRef: useCVRef } = React;
-function CourseView({ course, onUpdate }) {
-  const [tab, setTab] = useCVState('textbook');
+function CourseView({ course, onUpdate, activeTab, onTabChange }) {
+  const tab    = activeTab || 'textbook';
+  const setTab = onTabChange || (() => {});
   const [headerActions, setHeaderActions] = useCVState({});
   const [pendingCase, setPendingCase] = useCVState(null);
 
