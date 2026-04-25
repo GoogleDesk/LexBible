@@ -23,7 +23,7 @@ function QuizTab({ course, onUpdate }) {
   const [chDropOpen, setChDropOpen] = useQState(false);
   const [settings,   setSettings]   = useQState({ count: 20, type: 'mix', focusArea: '' });
   const [genState,   setGenState]   = useQState(null); // { total, done, error, status }
-  const [genReport,  setGenReport]  = useQState(null); // { setId, chId, factCount, appCount, ccCount, warnings }
+  const [genReport,  setGenReport]  = useQState(null); // { setId, chId, factCount, appCount, ccCount, warnings, audit }
   // Active quiz session
   const [session,    setSession]    = useQState(null);
   // { chId, setId, questions, idx, answers:{}, flaggedKeys:[], sessionStart }
@@ -225,6 +225,7 @@ function QuizTab({ course, onUpdate }) {
     const warnings = [];
     let topicsCataloged = 0;
     let chunkHeader = '';
+    let audit = null;       // { uncovered, weak, summary } | null
     try {
       newQs = await window.LexStore.generateQuizForChapter({
         content:      ch.content,
@@ -263,6 +264,12 @@ function QuizTab({ course, onUpdate }) {
             setGenState(prev => ({ ...prev, status: msg }));
           } else if (info.phase === 'synthesis-warning') {
             warnings.push(`Cross-section synthesis failed: ${info.error}`);
+          } else if (info.phase === 'audit') {
+            setGenState(prev => ({ ...prev, status: `Auditing coverage against ${info.totalTopics} cataloged topics…` }));
+          } else if (info.phase === 'audit-done') {
+            audit = info.audit;
+          } else if (info.phase === 'audit-warning') {
+            warnings.push(`Coverage audit failed: ${info.error}`);
           }
         },
         onBatch: (_batch, info) => {
@@ -311,7 +318,7 @@ function QuizTab({ course, onUpdate }) {
       });
 
       setGenState(null);
-      setGenReport({ setId: newSetId, chId: selChapter, factCount, appCount, ccCount, total: final.length, label, warnings });
+      setGenReport({ setId: newSetId, chId: selChapter, factCount, appCount, ccCount, total: final.length, label, warnings, audit });
     } catch (err) {
       setGenState(prev => ({ ...prev, error: err.message || 'Generation failed.' }));
     }
@@ -511,6 +518,19 @@ function QuizTab({ course, onUpdate }) {
               <span style={qS.genReportTitle}>✓ {genReport.label} generated — {genReport.total} questions</span>
               <span style={qS.genReportDetail}> · {genReport.factCount} fact-based · {genReport.appCount} application{genReport.ccCount ? ` · ${genReport.ccCount} compare/contrast` : ''}</span>
             </div>
+            {genReport.audit && genReport.audit.summary.totalTopics > 0 && (() => {
+              const s = genReport.audit.summary;
+              const fullCoverage = s.uncoveredCount === 0 && s.weakCount === 0;
+              const uncoveredList = (genReport.audit.uncovered || []).slice(0, 6).map(t => t.topic).join(' · ');
+              const more = (genReport.audit.uncovered || []).length > 6 ? ` (+${genReport.audit.uncovered.length - 6} more)` : '';
+              return fullCoverage
+                ? <div style={qS.genReportAuditOk}>✓ Coverage audit: {s.coveredCount}/{s.totalTopics} catalog topics covered with depth</div>
+                : <div style={qS.genReportAuditGap}>
+                    {s.uncoveredCount > 0 && <>⚠ {s.uncoveredCount} of {s.totalTopics} catalog topics not covered{uncoveredList ? `: ${uncoveredList}${more}` : ''}</>}
+                    {s.uncoveredCount > 0 && s.weakCount > 0 && <> · </>}
+                    {s.weakCount > 0 && <>{s.weakCount} weakly tested</>}
+                  </div>;
+            })()}
             {genReport.warnings && genReport.warnings.length > 0 && (
               <div style={qS.genReportWarn}>
                 ⚠ {genReport.warnings.length} non-fatal issue{genReport.warnings.length === 1 ? '' : 's'}: {genReport.warnings.join(' · ')}
@@ -858,6 +878,8 @@ const qS = {
   genReportTitle:{ fontSize:13.5, fontWeight:600, color:'#14532D' },
   genReportDetail:{ fontSize:12.5, color:'#166534' },
   genReportWarn:{ marginTop:5, fontSize:11.5, color:'#8B5E00', lineHeight:1.5 },
+  genReportAuditOk:{ marginTop:5, fontSize:11.5, color:'#166534', lineHeight:1.5 },
+  genReportAuditGap:{ marginTop:5, fontSize:11.5, color:'#8B5E00', lineHeight:1.5 },
   apiWarning:{ padding:'10px 14px', background:'#FDF3E0', border:'1px solid #E8D5A0', borderRadius:6, fontSize:12.5, color:'#8B5E00', marginBottom:18, lineHeight:1.55 },
   chunkPreview:{ padding:'10px 14px', background:'#F3EAFB', border:'1px solid #C4B5E0', borderRadius:6, fontSize:12.5, color:'#5B21B6', marginTop:10, marginBottom:6, lineHeight:1.55 },
   // Setup
