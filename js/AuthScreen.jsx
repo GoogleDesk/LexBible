@@ -55,14 +55,20 @@ function AuthScreen({ supabase }) {
   async function joinWaitlist() {
     setPhase('joining'); setErrMsg('');
     try {
-      // Idempotent: if the email is already on the list, treat as success.
+      // Plain insert (not upsert) — supabase-js upsert internally consults the
+      // UPDATE policy too, even with ignoreDuplicates, which would force us to
+      // grant UPDATE just to avoid that. INSERT + tolerate unique-violation is
+      // the same end result with one fewer policy.
       const { error } = await supabase
         .from('waitlist')
-        .upsert({ email: cleanEmail }, { onConflict: 'email', ignoreDuplicates: true });
-      if (error) throw error;
+        .insert({ email: cleanEmail });
+      // 23505 = unique_violation (already on the list). Treat as success.
+      if (error && error.code !== '23505') throw error;
       setPhase('waitlisted');
     } catch (err) {
-      setPhase('error');
+      // Stay on the not-allowed panel so the error has context, instead of
+      // falling through to the sign-in form.
+      setPhase('not-allowed');
       setErrMsg(err.message || 'Could not add you to the waitlist.');
     }
   }
@@ -95,10 +101,10 @@ function AuthScreen({ supabase }) {
               you when access opens up.
             </p>
             <button onClick={joinWaitlist} disabled={phase === 'joining'} style={aS.btn}>
-              Add me to the waitlist
+              {phase === 'joining' ? 'Adding…' : 'Add me to the waitlist'}
             </button>
             <button onClick={reset} style={aS.btnGhost}>Use a different email</button>
-            {phase === 'error' && <div style={aS.err}>{errMsg}</div>}
+            {errMsg && <div style={aS.err}>{errMsg}</div>}
           </>
         ) : phase === 'waitlisted' ? (
           <>
