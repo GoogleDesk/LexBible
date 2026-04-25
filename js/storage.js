@@ -174,15 +174,27 @@ async function callAnthropicAPI(apiKey, {
   messages,               // array of {role, content} where content is string or block array
   prompt,                 // convenience: builds messages = [{role:'user', content: prompt}]
   maxTokens = 16000,
-  thinking,               // {type:'enabled', budget_tokens:N} | undefined
+  thinking,               // legacy {type:'enabled', budget_tokens:N} or new {type:'adaptive'}
+  outputConfig,           // {effort: 'low'|'medium'|'high'} — pairs with adaptive thinking
 } = {}) {
   const body = {
     model: 'claude-opus-4-7',
     max_tokens: maxTokens,
     messages: messages || [{ role: 'user', content: prompt || '' }],
   };
-  if (system)   body.system   = system;
-  if (thinking) body.thinking = thinking;
+  if (system)       body.system        = system;
+  if (outputConfig) body.output_config = outputConfig;
+  if (thinking) {
+    if (thinking.type === 'enabled') {
+      // Opus 4.5/4.6 used {type:'enabled', budget_tokens}. Opus 4.7 rejects that
+      // shape; it expects {type:'adaptive'} + output_config.effort instead.
+      // Translate so call sites can keep using the legacy shape.
+      body.thinking = { type: 'adaptive' };
+      if (!body.output_config) body.output_config = { effort: 'high' };
+    } else {
+      body.thinking = thinking;
+    }
+  }
   // When thinking is enabled the API requires temperature=1 (the default), so we omit it.
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -497,6 +509,33 @@ Return ONLY a valid JSON array — no markdown fences, no commentary, no preambl
 Example shape:
 [{"topic":"Pennoyer v. Neff","type":"case","importance":"core"},{"topic":"Erie doctrine — substantive vs procedural classification","type":"doctrine","importance":"core"},{"topic":"Restatement (Second) § 351 — foreseeability","type":"rule","importance":"supporting"}]`;
 
+// ── Quiz audit: stable system prompt for the post-generation coverage audit ──
+// Runs once after synthesis. Compares the master catalog against the questions
+// actually generated and reports gaps. Soft signal — failures and gaps are
+// surfaced to the user but don't block the run.
+const QUIZ_AUDIT_SYSTEM_PROMPT = `You are auditing whether a generated law-school quiz comprehensively tests every topic from a chapter's master topic catalog. The catalog was built first via a separate cataloging pass; the quiz was then generated against the same source. Your job is to compare the two honestly.
+
+═══ HOW TO AUDIT ═══
+For each topic in the catalog, decide:
+  1. Is there at least one quiz question that genuinely tests this topic? Use SEMANTIC matching — be flexible about exact label wording. Look at the question content, not just the topic tag. A question tagged "Erie's choice-of-law test" covers a catalog topic of "Erie doctrine — substantive vs procedural classification" even though the labels differ.
+  2. If covered, is the testing DEEP (synthesis, application, novel facts, multi-step analysis) or WEAK (single-sentence recognition, definitional lookup, restating the holding verbatim)?
+
+═══ OUTPUT FORMAT ═══
+Return ONLY a valid JSON object — no markdown fences, no commentary, no preamble. The object MUST have exactly these keys:
+
+  "uncovered": array of topic objects from the catalog with NO matching question.
+                Each entry: {"topic": "...", "section": "...", "type": "...", "importance": "..."}
+  "weak":       array of topic objects covered ONLY by surface-level questions.
+                Each entry: {"topic": "...", "section": "...", "type": "...", "importance": "..."}
+  "summary":    {"totalTopics": N, "coveredCount": N, "weakCount": N, "uncoveredCount": N}
+
+The summary numbers must be self-consistent: coveredCount + uncoveredCount == totalTopics, and weakCount <= coveredCount. "Covered" includes weakly-covered topics (a weak question still counts as coverage; weakCount measures depth of that coverage).
+
+Be HONEST. Do not under-report uncovered topics to make the quiz look more comprehensive than it is. Equally, do not over-report — only flag a topic as uncovered if no question genuinely tests it.
+
+Example shape:
+{"uncovered":[{"topic":"Restatement (Second) § 351 — foreseeability","section":"pages 60–88","type":"rule","importance":"supporting"}],"weak":[{"topic":"Pennoyer v. Neff","section":"pages 1–34","type":"case","importance":"core"}],"summary":{"totalTopics":32,"coveredCount":31,"weakCount":1,"uncoveredCount":1}}`;
+
 // ── Chunking for long chapters ────────────────────────────────────────────────
 // Split a chapter into chunks no larger than maxChunkChars, preferring to cut
 // at [Page N] boundaries (preserved by basicCleanContent). Falls back to
@@ -810,6 +849,118 @@ Now produce the JSON array of compare/contrast questions.`;
   return questions.map(q => ({ ...q, qtype: 'compare-contrast' }));
 }
 
+// ── Coverage audit: final quality gate ───────────────────────────────────────
+// One API call comparing the master catalog against all generated questions.
+// Returns { uncovered, weak, summary } per QUIZ_AUDIT_SYSTEM_PROMPT. Throws on
+// API or parse failure — caller decides whether to surface as warning or error.
+async function runCoverageAudit({
+  chunks, perChunkCatalogs, generatedQuestions, chapterTitle,
+}) {
+  // Build a flat catalog with section labels attached.
+  const flatCatalog = [];
+  perChunkCatalogs.forEach((cat, ci) => {
+    const section = chunks[ci].pageRange
+      ? `pages ${chunks[ci].pageRange.start}–${chunks[ci].pageRange.end}`
+      : (chunks.length > 1 ? `section ${ci + 1}` : 'whole chapter');
+    (cat || []).forEach(t => flatCatalog.push({
+      topic: t.topic, type: t.type, importance: t.importance, section,
+    }));
+  });
+
+  if (flatCatalog.length === 0) {
+    // No catalog → nothing to audit against. Return an empty audit rather than calling the API.
+    return {
+      uncovered: [],
+      weak: [],
+      summary: { totalTopics: 0, coveredCount: 0, weakCount: 0, uncoveredCount: 0 },
+      skipped: 'empty-catalog',
+    };
+  }
+
+  const catalogText = flatCatalog
+    .map((t, i) => `${i + 1}. [${t.type}, ${t.importance}, ${t.section}] ${t.topic}`)
+    .join('\n');
+
+  const questionsText = generatedQuestions
+    .map((q, i) => {
+      const topic = q.topic ? `[${q.topic}] ` : '';
+      const stem  = (q.question || '').slice(0, 280);
+      const qt    = q.qtype ? ` (${q.qtype})` : '';
+      return `Q${i + 1}${qt}: ${topic}${stem}`;
+    })
+    .join('\n');
+
+  const userBlock =
+`═══ COVERAGE AUDIT ═══
+Chapter: "${chapterTitle}"
+
+═══ MASTER TOPIC CATALOG (${flatCatalog.length} topics) ═══
+${catalogText}
+
+═══ GENERATED QUESTIONS (${generatedQuestions.length} total) ═══
+${questionsText || '(no questions generated)'}
+
+═══ AUDIT TASK ═══
+Compare every catalog topic against the generated questions. Output the JSON object per the system prompt schema. Be honest — over- and under-reporting both hurt the student.
+
+Now produce the JSON.`;
+
+  const result = await callClaudeRich({
+    system: [
+      { type: 'text', text: QUIZ_AUDIT_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+    ],
+    messages: [{
+      role: 'user',
+      content: [{ type: 'text', text: userBlock }],
+    }],
+    maxTokens: 16000,
+    thinking: { type: 'enabled', budget_tokens: 8000 },
+  });
+
+  if (result.stopReason === 'max_tokens') {
+    throw new Error('Coverage audit: output was truncated (hit max_tokens).');
+  }
+
+  // The audit returns a JSON object, not array. Use a string-aware brace scan
+  // so a } inside a string value (e.g. a topic name) doesn't terminate early.
+  const text = result.text;
+  const startIdx = text.indexOf('{');
+  if (startIdx === -1) throw new Error('Coverage audit: no JSON object in response.');
+  let depth = 0, endIdx = -1, inStr = false, escape = false;
+  for (let i = startIdx; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (escape)      escape = false;
+      else if (c === '\\') escape = true;
+      else if (c === '"')  inStr = false;
+    } else {
+      if      (c === '"') inStr = true;
+      else if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { endIdx = i; break; } }
+    }
+  }
+  if (endIdx === -1) throw new Error('Coverage audit: unterminated JSON object.');
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text.slice(startIdx, endIdx + 1));
+  } catch(e) {
+    throw new Error('Coverage audit: malformed JSON.');
+  }
+
+  // Defensive normalization — model may omit fields on edge cases.
+  return {
+    uncovered: Array.isArray(parsed.uncovered) ? parsed.uncovered : [],
+    weak:      Array.isArray(parsed.weak)      ? parsed.weak      : [],
+    summary: {
+      totalTopics:     Number(parsed.summary?.totalTopics)     || flatCatalog.length,
+      coveredCount:    Number(parsed.summary?.coveredCount)    || 0,
+      weakCount:       Number(parsed.summary?.weakCount)       || 0,
+      uncoveredCount:  Number(parsed.summary?.uncoveredCount)  || 0,
+    },
+  };
+}
+
 // ── Quiz batch generation (rigorous, coverage-mandated) ───────────────────────
 // Generates ONE batch against the supplied content. Callers responsible for
 // keeping content under QUIZ_MAX_SINGLE_PASS_CHARS — generateQuizForChapter
@@ -1063,6 +1214,29 @@ async function generateQuizForChapter({
     }
   }
 
+  // Coverage audit — final quality gate. Compares the master catalog against
+  // generated questions and surfaces gaps. Soft failure: errors are logged and
+  // the audit is reported as unavailable, but the questions themselves still
+  // ship to the user.
+  if (!shouldCancel() && allQuestions.length > 0) {
+    const totalCatalogTopics = catalog.perChunk.reduce((s, c) => s + (c?.length || 0), 0);
+    if (totalCatalogTopics > 0) {
+      onStatus({ phase: 'audit', totalTopics: totalCatalogTopics });
+      try {
+        const audit = await runCoverageAudit({
+          chunks,
+          perChunkCatalogs:   catalog.perChunk,
+          generatedQuestions: allQuestions,
+          chapterTitle,
+        });
+        onStatus({ phase: 'audit-done', audit });
+      } catch (e) {
+        console.warn(`Coverage audit failed for "${chapterTitle}":`, e.message);
+        onStatus({ phase: 'audit-warning', error: e.message });
+      }
+    }
+  }
+
   return allQuestions;
 }
 
@@ -1295,6 +1469,7 @@ window.LexStore = {
   generateQuizForChapter,
   buildChunkCatalog, buildChapterCatalog,
   generateCrossSectionSynthesis,
+  runCoverageAudit,
   chunkChapter,
   generateBriefsHTML,
   generateMissReportHTML,
