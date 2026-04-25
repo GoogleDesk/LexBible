@@ -684,10 +684,22 @@ async function buildChapterCatalog({
     try {
       const topics = await buildChunkCatalog({ chunkContent: chunk.content, sectionLabel });
       perChunk.push(topics);
+      onStatus({
+        phase: 'catalog-done',
+        chunkIndex: ci, totalChunks: chunks.length,
+        pageRange: chunk.pageRange,
+        topicCount: topics.length,
+      });
     } catch (e) {
       console.warn(`Catalog failed for chunk ${ci} of "${chapterTitle}":`, e.message);
       perChunk.push([]);
       failures.push({ chunkIndex: ci, error: e.message });
+      onStatus({
+        phase: 'catalog-warning',
+        chunkIndex: ci, totalChunks: chunks.length,
+        pageRange: chunk.pageRange,
+        error: e.message,
+      });
     }
   }
   return { perChunk, failures };
@@ -1043,8 +1055,10 @@ async function generateQuizForChapter({
           pageRange: null,
         });
       }
+      onStatus({ phase: 'synthesis-done', questionCount: ccQuestions.length });
     } catch (e) {
       console.warn(`Cross-section synthesis failed for "${chapterTitle}":`, e.message);
+      onStatus({ phase: 'synthesis-warning', error: e.message });
       // Soft failure — user still gets per-chunk questions.
     }
   }
