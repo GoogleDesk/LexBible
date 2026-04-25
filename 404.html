@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LexBrother — Law School Companion</title>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,700&display=swap"
+    rel="stylesheet"
+  />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body, #root {
+      height: 100%;
+      overflow: hidden;
+      background: #F8F6F1;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar       { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #D0C4A8; border-radius: 3px; }
+
+    /* Focus ring for inputs/textareas */
+    textarea:focus,
+    input:focus,
+    select:focus {
+      outline: none;
+      box-shadow: 0 0 0 2.5px rgba(184, 150, 46, 0.28);
+    }
+
+    /* Disabled state */
+    button:disabled { opacity: 0.45; cursor: not-allowed !important; }
+
+    /* Range slider chrome */
+    input[type="range"] { -webkit-appearance: none; height: 4px; border-radius: 2px; background: #DDD6CC; cursor: pointer; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #2A6049; cursor: pointer; }
+
+    /* Smooth hover for nav items */
+    button { font-family: inherit; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React + Babel -->
+  <script
+    src="https://unpkg.com/react@18.3.1/umd/react.development.js"
+    integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L"
+    crossorigin="anonymous"
+  ></script>
+  <script
+    src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"
+    integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm"
+    crossorigin="anonymous"
+  ></script>
+  <script
+    src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+    integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y"
+    crossorigin="anonymous"
+  ></script>
+
+  <!-- Supabase JS SDK (cloud storage + auth) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+
+  <!-- Cloud config — edit js/config.js with your Supabase URL and anon key -->
+  <script src="js/config.js"></script>
+
+  <!-- URL routing helpers -->
+  <script src="js/routing.js"></script>
+
+  <!-- Data layer (plain JS — no Babel needed) -->
+  <script src="js/storage.js"></script>
+
+  <!-- Components (each gets its own Babel scope; exports to window) -->
+  <script type="text/babel" src="js/AuthScreen.jsx"></script>
+  <script type="text/babel" src="js/Sidebar.jsx"></script>
+  <script type="text/babel" src="js/TextbookTab.jsx"></script>
+  <script type="text/babel" src="js/QuizTab.jsx"></script>
+  <script type="text/babel" src="js/CaseBriefsTab.jsx"></script>
+  <script type="text/babel" src="js/CourseView.jsx"></script>
+
+  <!-- Root app (renders to #root) -->
+  <script type="text/babel" src="js/App.jsx"></script>
+</body>
+</html>
