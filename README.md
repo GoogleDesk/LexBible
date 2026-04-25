@@ -69,9 +69,102 @@ create policy "Users can insert own data"
 create policy "Users can update own data"
   on public.user_data for update
   using (auth.uid() = user_id);
+
+
+-- ── Access control: invite-only + waitlist ───────────────────────────────────
+-- Only emails listed in allowed_emails can sign up. Anyone else lands in
+-- waitlist when they try. Both tables are hidden from anon SELECT — the
+-- client interacts via an RPC and a single insert.
+
+create table public.allowed_emails (
+  email      text        primary key,
+  added_at   timestamptz not null default now(),
+  note       text
+);
+alter table public.allowed_emails enable row level security;
+-- No anon policies — table is reached only via security-definer functions.
+
+create table public.waitlist (
+  email      text        primary key,
+  created_at timestamptz not null default now()
+);
+alter table public.waitlist enable row level security;
+
+create policy "Anyone can request a waitlist spot"
+  on public.waitlist for insert
+  to anon, authenticated
+  with check (true);
+
+-- RPC: client asks "is this email allowed?" without being able to list the
+-- whole allowlist. SECURITY DEFINER lets it read allowed_emails despite RLS.
+create or replace function public.is_email_allowed(email_input text)
+returns boolean
+language sql
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.allowed_emails
+    where email = lower(email_input)
+  );
+$$;
+grant execute on function public.is_email_allowed(text) to anon, authenticated;
+
+-- Auth-hook hardening: block creation of any auth.users row whose email
+-- isn't on the allowlist. This stops magic-link signups from non-allowed
+-- emails server-side, even if the client check is bypassed.
+create or replace function public.enforce_allowed_email_on_signup()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (
+    select 1 from public.allowed_emails
+    where email = lower(NEW.email)
+  ) then
+    raise exception 'Email % is not authorized to sign up.', NEW.email
+      using errcode = '42501';
+  end if;
+  return NEW;
+end;
+$$;
+
+drop trigger if exists enforce_allowed_email_on_signup on auth.users;
+create trigger enforce_allowed_email_on_signup
+  before insert on auth.users
+  for each row
+  execute function public.enforce_allowed_email_on_signup();
+
+-- Seed yourself. Add additional rows as you invite people.
+insert into public.allowed_emails (email) values
+  ('r.asaad.manzar@gmail.com')
+on conflict (email) do nothing;
 ```
 
 You should see "Success. No rows returned." That's correct — the table is empty until you sign in.
+
+### How the allowlist works in practice
+
+- **You** (and anyone else in `allowed_emails`) sign in normally with a magic link.
+- **Anyone else** sees a "we're not accepting new users right now" message with a button to add their email to the `waitlist` table.
+- To invite someone new later, run:
+  ```sql
+  insert into public.allowed_emails (email) values ('new-friend@example.com')
+  on conflict (email) do nothing;
+  ```
+- To see who's waiting, run:
+  ```sql
+  select email, created_at from public.waitlist order by created_at;
+  ```
+- If you had any pre-existing test accounts created before the trigger was added, they can still sign in with their old session. To kick them out:
+  ```sql
+  delete from auth.users
+  where lower(email) not in (select email from public.allowed_emails);
+  -- public.user_data rows cascade away automatically.
+  ```
+  Run the matching `select` first to confirm who'd be removed.
 
 ### 3. Set the redirect URL for magic-link sign-in
 

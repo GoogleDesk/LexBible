@@ -18,20 +18,29 @@ function ConfigMissingScreen() {
 
 function AuthScreen({ supabase }) {
   const [email,  setEmail]  = useAuthState('');
-  const [phase,  setPhase]  = useAuthState('idle'); // idle | sending | sent | error
+  // idle | checking | sending | sent | not-allowed | joining | waitlisted | error
+  const [phase,  setPhase]  = useAuthState('idle');
   const [errMsg, setErrMsg] = useAuthState('');
 
-  async function sendMagicLink(e) {
+  const cleanEmail = email.trim().toLowerCase();
+
+  async function submitEmail(e) {
     e.preventDefault();
-    const clean = email.trim().toLowerCase();
-    if (!/.+@.+\..+/.test(clean)) {
+    if (!/.+@.+\..+/.test(cleanEmail)) {
       setPhase('error'); setErrMsg('Please enter a valid email address.');
       return;
     }
-    setPhase('sending'); setErrMsg('');
+    setPhase('checking'); setErrMsg('');
     try {
+      const { data: allowed, error: rpcErr } = await supabase.rpc(
+        'is_email_allowed', { email_input: cleanEmail },
+      );
+      if (rpcErr) throw rpcErr;
+      if (!allowed) { setPhase('not-allowed'); return; }
+
+      setPhase('sending');
       const { error } = await supabase.auth.signInWithOtp({
-        email: clean,
+        email: cleanEmail,
         // Always land on site root after sign-in; routing then takes over.
         options: { emailRedirectTo: window.location.origin + '/' },
       });
@@ -43,43 +52,92 @@ function AuthScreen({ supabase }) {
     }
   }
 
+  async function joinWaitlist() {
+    setPhase('joining'); setErrMsg('');
+    try {
+      // Idempotent: if the email is already on the list, treat as success.
+      const { error } = await supabase
+        .from('waitlist')
+        .upsert({ email: cleanEmail }, { onConflict: 'email', ignoreDuplicates: true });
+      if (error) throw error;
+      setPhase('waitlisted');
+    } catch (err) {
+      setPhase('error');
+      setErrMsg(err.message || 'Could not add you to the waitlist.');
+    }
+  }
+
+  function reset() {
+    setPhase('idle'); setErrMsg(''); setEmail('');
+  }
+
   return (
     <div style={aS.root}>
       <div style={aS.card}>
         <div style={aS.brand}>LexBrother</div>
-        <h2 style={aS.headline}>Sign in to sync across devices</h2>
-        <p style={aS.copy}>
-          Enter your email and we'll send you a one-click sign-in link. No
-          password to remember. Your data (courses, chapters, quizzes, briefs)
-          lives in your Supabase project.
-        </p>
 
         {phase === 'sent' ? (
-          <div style={aS.sentBox}>
-            <strong>Check your inbox.</strong> We sent a sign-in link to
-            <div style={aS.sentEmail}>{email.trim().toLowerCase()}</div>
-            Click the link to finish signing in. You can close this tab —
-            the link opens LexBrother directly.
-          </div>
-        ) : (
-          <form onSubmit={sendMagicLink}>
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              autoFocus
-              style={aS.input}
-              disabled={phase === 'sending'}
-            />
-            <button
-              type="submit"
-              disabled={phase === 'sending' || !email.trim()}
-              style={aS.btn}>
-              {phase === 'sending' ? 'Sending link…' : 'Email me a sign-in link'}
+          <>
+            <h2 style={aS.headline}>Check your inbox</h2>
+            <div style={aS.sentBox}>
+              We sent a sign-in link to
+              <div style={aS.sentEmail}>{cleanEmail}</div>
+              Click the link to finish signing in. You can close this tab —
+              the link opens LexBrother directly.
+            </div>
+          </>
+        ) : phase === 'not-allowed' ? (
+          <>
+            <h2 style={aS.headline}>Not currently accepting new users</h2>
+            <p style={aS.copy}>
+              LexBrother is invite-only right now. If you're interested, we
+              can add <strong>{cleanEmail}</strong> to the waitlist and email
+              you when access opens up.
+            </p>
+            <button onClick={joinWaitlist} disabled={phase === 'joining'} style={aS.btn}>
+              Add me to the waitlist
             </button>
+            <button onClick={reset} style={aS.btnGhost}>Use a different email</button>
             {phase === 'error' && <div style={aS.err}>{errMsg}</div>}
-          </form>
+          </>
+        ) : phase === 'waitlisted' ? (
+          <>
+            <h2 style={aS.headline}>You're on the list</h2>
+            <div style={aS.sentBox}>
+              We'll email
+              <div style={aS.sentEmail}>{cleanEmail}</div>
+              when access opens up. Thanks for your interest.
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 style={aS.headline}>Sign in to sync across devices</h2>
+            <p style={aS.copy}>
+              Enter your email and we'll send you a one-click sign-in link. No
+              password to remember. Your data (courses, chapters, quizzes, briefs)
+              lives in your Supabase project.
+            </p>
+            <form onSubmit={submitEmail}>
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoFocus
+                style={aS.input}
+                disabled={phase === 'checking' || phase === 'sending'}
+              />
+              <button
+                type="submit"
+                disabled={phase === 'checking' || phase === 'sending' || !email.trim()}
+                style={aS.btn}>
+                {phase === 'checking' ? 'Checking…'
+                  : phase === 'sending'  ? 'Sending link…'
+                  : 'Email me a sign-in link'}
+              </button>
+              {phase === 'error' && <div style={aS.err}>{errMsg}</div>}
+            </form>
+          </>
         )}
       </div>
     </div>
@@ -115,6 +173,11 @@ const aS = {
     width:'100%', padding:'11px 14px', fontSize:14, fontWeight:600,
     background:'#2A6049', color:'white', border:'none', borderRadius:6,
     cursor:'pointer', fontFamily:'inherit',
+  },
+  btnGhost: {
+    width:'100%', padding:'10px 14px', fontSize:13.5, fontWeight:500,
+    background:'none', color:'#6B5B47', border:'1px solid #E2D9CC',
+    borderRadius:6, cursor:'pointer', fontFamily:'inherit', marginTop:8,
   },
   err: { marginTop:12, fontSize:13, color:'#9B2335' },
   sentBox: {
