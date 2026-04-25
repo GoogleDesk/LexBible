@@ -197,20 +197,37 @@ async function callAnthropicAPI(apiKey, {
   }
   // When thinking is enabled the API requires temperature=1 (the default), so we omit it.
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error?.message || `API error ${response.status}`);
+  // Retry transient 429 (rate limit) and 529 (overloaded) responses, honoring
+  // the retry-after header when present. Caps at 4 attempts so we don't loop
+  // forever on a request that's structurally too large for the org's tier.
+  const maxAttempts = 4;
+  let response, errBody;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    if (response.ok) break;
+    errBody = await response.json().catch(() => ({}));
+    const isRetryable = response.status === 429 || response.status === 529;
+    if (!isRetryable || attempt === maxAttempts) {
+      const msg = errBody.error?.message || `API error ${response.status}`;
+      throw new Error(msg);
+    }
+    // Wait the server-suggested duration, or fall back to exponential backoff.
+    const headerWait = parseFloat(response.headers.get('retry-after') || '');
+    const waitMs = Number.isFinite(headerWait) && headerWait > 0
+      ? Math.min(headerWait * 1000, 65000)
+      : Math.min(2000 * Math.pow(2, attempt - 1), 30000);
+    await new Promise(r => setTimeout(r, waitMs));
   }
+
   const data = await response.json();
   // Extended thinking emits thinking blocks before the answer — pull the text block.
   const textBlock = (data.content || []).find(b => b.type === 'text');
@@ -395,12 +412,12 @@ function parseTOC(text) {
 function qKey(q) { return (q.question || '').slice(0, 100).trim(); }
 
 // ── Quiz generation: chunking thresholds ──────────────────────────────────────
-// Single-pass safety ceiling: hard upper bound on what we'll send in one call.
-// Chunk ceiling: target size for each chunk in map-reduce mode — kept under
-// the single-pass ceiling to leave headroom for cross-chunk context the next
-// commit will add (per-chunk topic catalog, cross-section synthesis).
-const QUIZ_MAX_SINGLE_PASS_CHARS = 400000;
-const QUIZ_MAX_CHUNK_CHARS       = 350000;
+// Sized to fit comfortably under Anthropic tier-1 per-minute input-token
+// limits (typically 30K TPM). 80,000 chars ≈ 23K tokens, leaving ~7K headroom
+// for the system prompt and per-batch user instructions. Higher-tier users
+// can safely increase these.
+const QUIZ_MAX_SINGLE_PASS_CHARS = 80000;
+const QUIZ_MAX_CHUNK_CHARS       = 80000;
 
 // ── Quiz generation: stable system prompt (cached across batches and runs) ────
 // Chapter-agnostic, run-agnostic. Per-run stuff (chapter title, focus area,
