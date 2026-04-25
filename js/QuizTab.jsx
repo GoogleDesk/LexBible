@@ -513,10 +513,10 @@ function QuizTab({ course, onUpdate }) {
                   const resumeIdx   = set.progress?.idx || 0;
                   const resumeCount = Object.keys(set.progress?.answers || {}).length;
 
-                  const typeLabel = set.settings?.type === 'fact' ? 'Fact-Based' : set.settings?.type === 'application' ? 'Application' : 'Mixed';
+                  const typeLabel = set.settings?.type === 'fact' ? 'fact-based' : set.settings?.type === 'application' ? 'application' : 'mixed';
                   const isDone = set.sessions?.length > 0;
                   const metaText = isDone
-                    ? `${set.questions.length} questions · ${typeLabel}${lastPct !== null ? ' · ' + lastPct + '% correct' : ''}`
+                    ? `${lastPct}% · ${set.questions.length} questions · ${typeLabel}`
                     : inProgress
                       ? `${resumeCount}/${set.questions.length} answered · ${typeLabel}`
                       : `${set.questions.length} questions · ${typeLabel}`;
@@ -674,7 +674,7 @@ function QuizNavBar({ questions, answers, currentIdx, onJump, flaggedKeys = [] }
           const isRight  = ans === q.correct;
           const isWrong  = ans !== undefined && !isRight;
           const isFlaggedQ = (flaggedKeys || []).includes((q.question || '').slice(0, 100).trim());
-          const bg      = isFlaggedQ ? '#2A6049' : isRight ? '#4A7C59' : isWrong ? '#C0392B' : isCur ? '#1A1714' : '#F0EBE0';
+          const bg      = isFlaggedQ ? '#D4A017' : isRight ? '#4A7C59' : isWrong ? '#C0392B' : isCur ? '#1A1714' : '#F0EBE0';
           const color   = (isCur || isRight || isWrong || isFlaggedQ) ? 'white' : '#4A3D30';
           const curOutline = isCur ? '2px solid #2A6049' : 'none';
           return (
