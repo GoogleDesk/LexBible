@@ -174,15 +174,27 @@ async function callAnthropicAPI(apiKey, {
   messages,               // array of {role, content} where content is string or block array
   prompt,                 // convenience: builds messages = [{role:'user', content: prompt}]
   maxTokens = 16000,
-  thinking,               // {type:'enabled', budget_tokens:N} | undefined
+  thinking,               // legacy {type:'enabled', budget_tokens:N} or new {type:'adaptive'}
+  outputConfig,           // {effort: 'low'|'medium'|'high'} — pairs with adaptive thinking
 } = {}) {
   const body = {
     model: 'claude-opus-4-7',
     max_tokens: maxTokens,
     messages: messages || [{ role: 'user', content: prompt || '' }],
   };
-  if (system)   body.system   = system;
-  if (thinking) body.thinking = thinking;
+  if (system)       body.system        = system;
+  if (outputConfig) body.output_config = outputConfig;
+  if (thinking) {
+    if (thinking.type === 'enabled') {
+      // Opus 4.5/4.6 used {type:'enabled', budget_tokens}. Opus 4.7 rejects that
+      // shape; it expects {type:'adaptive'} + output_config.effort instead.
+      // Translate so call sites can keep using the legacy shape.
+      body.thinking = { type: 'adaptive' };
+      if (!body.output_config) body.output_config = { effort: 'high' };
+    } else {
+      body.thinking = thinking;
+    }
+  }
   // When thinking is enabled the API requires temperature=1 (the default), so we omit it.
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
