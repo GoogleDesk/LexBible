@@ -27,7 +27,8 @@ function App() {
   const [dataReady,    setDataReady]    = useAppState(false); // true after initCloud resolves
   const [initError,    setInitError]    = useAppState('');
   const [data,         setData]         = useAppState(null);
-  const [activeCourse, setActiveCourse] = useAppState('civil-procedure');
+  const [activeCourse, setActiveCourse] = useAppState(window.LexRouting.DEFAULT_COURSE_ID);
+  const [activeTab,    setActiveTab]    = useAppState(window.LexRouting.DEFAULT_TAB);
   const [tweaksOn,     setTweaksOn]     = useAppState(false);
   const [tweaks,       setTweaks]       = useAppState(TWEAK_DEFAULTS);
 
@@ -75,6 +76,59 @@ function App() {
     window.addEventListener('beforeunload', onUnload);
     return () => window.removeEventListener('beforeunload', onUnload);
   }, []);
+
+  // ── URL routing: hydrate state from URL once data loads, then keep URL in sync
+  useAppEffect(() => {
+    if (!dataReady || !data) return;
+    const all = [
+      ...window.LexStore.DEFAULT_COURSES,
+      ...(data.customCourses || []),
+    ];
+    const { idBySlug } = window.LexRouting.buildSlugMap(all);
+    const parsed = window.LexRouting.parseLocation();
+    const courseId = parsed.slug && idBySlug.get(parsed.slug);
+    if (courseId) setActiveCourse(courseId);
+    if (parsed.tab) setActiveTab(parsed.tab);
+    // If the URL pointed to a missing course, normalize it without adding a history entry
+    if (parsed.slug && !courseId) {
+      const slug = window.LexRouting.buildSlugMap(all).slugById.get(window.LexRouting.DEFAULT_COURSE_ID);
+      window.history.replaceState(null, '', window.LexRouting.buildPath(slug, window.LexRouting.DEFAULT_TAB));
+    }
+  }, [dataReady]); // intentional: hydrate once when data first becomes ready
+
+  // Push state→URL whenever the user navigates inside the app
+  useAppEffect(() => {
+    if (!dataReady || !data || !activeCourse) return;
+    const all = [
+      ...window.LexStore.DEFAULT_COURSES,
+      ...(data.customCourses || []),
+    ];
+    const { slugById } = window.LexRouting.buildSlugMap(all);
+    const slug = slugById.get(activeCourse);
+    if (!slug) return;
+    const newPath = window.LexRouting.buildPath(slug, activeTab);
+    if (window.location.pathname !== newPath) {
+      window.history.pushState(null, '', newPath);
+    }
+  }, [activeCourse, activeTab, dataReady, data]);
+
+  // Browser back/forward
+  useAppEffect(() => {
+    if (!dataReady || !data) return;
+    function onPop() {
+      const all = [
+        ...window.LexStore.DEFAULT_COURSES,
+        ...(data.customCourses || []),
+      ];
+      const { idBySlug } = window.LexRouting.buildSlugMap(all);
+      const parsed = window.LexRouting.parseLocation();
+      const courseId = (parsed.slug && idBySlug.get(parsed.slug)) || window.LexRouting.DEFAULT_COURSE_ID;
+      setActiveCourse(courseId);
+      setActiveTab(parsed.tab || window.LexRouting.DEFAULT_TAB);
+    }
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [dataReady, data]);
 
   useAppEffect(() => {
     const handler = e => {
@@ -124,7 +178,10 @@ function App() {
         courses: newCourses,
       };
     });
-    if (activeCourse === courseId) setActiveCourse('civil-procedure');
+    if (activeCourse === courseId) {
+      setActiveCourse(window.LexRouting.DEFAULT_COURSE_ID);
+      setActiveTab(window.LexRouting.DEFAULT_TAB);
+    }
   }
 
   function updateTweak(key, val) {
@@ -163,7 +220,7 @@ function App() {
         courses={defaultCourses}
         customCourses={customCourses}
         activeCourse={activeCourse}
-        onSelect={setActiveCourse}
+        onSelect={id => { setActiveCourse(id); setActiveTab(window.LexRouting.DEFAULT_TAB); }}
         onResetCourse={resetCourse}
         onAddCourse={addCourse}
         onDeleteCourse={deleteCourse}
@@ -175,6 +232,8 @@ function App() {
         <CourseView
           course={activeCourseData}
           onUpdate={updates => updateCourse(activeCourse, updates)}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
         />
       )}
 

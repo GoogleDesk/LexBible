@@ -148,6 +148,21 @@ Every future `git push` to the main branch triggers an auto-deploy. No environme
 
 Without a key, the app falls back to a built-in quota (rate-limited and capped at 30 questions per quiz). With a key, you get up to 500 questions and full TOC cleanup on Claude Opus 4.7.
 
+## URLs and bookmarking
+
+Each course (and inner tab) has its own URL, so you can bookmark or share links to specific places:
+
+- `/` — opens the default course (Civil Procedure)
+- `/criminal-law` — Criminal Law, Textbook tab
+- `/criminal-law/quizzes` — Criminal Law, Quizzes tab
+- `/criminal-law/briefs` — Criminal Law, Case Briefs tab
+
+Default-course slugs match their IDs (e.g. `civil-procedure`, `constitutional-law`, `legal-research-writing`). Custom courses get a slug auto-generated from their name (e.g. "Intellectual Property" → `/intellectual-property`). Browser back/forward navigates between courses just like a normal site.
+
+If a URL points to a course that no longer exists, the app silently falls back to the default course.
+
+The `_redirects` file at the repo root tells Cloudflare Pages to serve `index.html` for any path so refreshes on `/criminal-law` work — don't delete it.
+
 ## Cross-device notes
 
 - Sign in on each device with the same email — your courses, chapters, quizzes, briefs, and API key appear automatically.
