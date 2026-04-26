@@ -87,6 +87,7 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
   const [newChapterTitle,  setNewChapterTitle]  = useTBState('');
   const [phase,            setPhase]            = useTBState('idle'); // idle | cleaning | parsing | saving
   const [statusMsg,        setStatusMsg]        = useTBState('');
+  const [draggedId,        setDraggedId]        = useTBState(null);
 
   const chapters = course.chapters || [];
   const hasApiKey = !!window.LexStore.loadApiKey();
@@ -187,13 +188,14 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
     });
   }
 
-  function handleMoveChapter(chId, dir) {
-    const idx = chapters.findIndex(c => c.id === chId);
-    if (idx < 0) return;
-    const newIdx = idx + dir;
-    if (newIdx < 0 || newIdx >= chapters.length) return;
+  function handleDragOverChapter(targetId) {
+    if (!draggedId || draggedId === targetId) return;
+    const fromIdx = chapters.findIndex(c => c.id === draggedId);
+    const toIdx   = chapters.findIndex(c => c.id === targetId);
+    if (fromIdx < 0 || toIdx < 0) return;
     const next = [...chapters];
-    [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
     onUpdate({ chapters: next.map((c, i) => ({ ...c, number: i + 1 })) });
   }
 
@@ -248,7 +250,7 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
   return (
     <div style={tbS.root}>
       <div style={tbS.list}>
-        {chapters.map((ch, i) => (
+        {chapters.map(ch => (
           <ChapterCard
             key={ch.id} chapter={ch}
             expanded={expandedChapter === ch.id}
@@ -256,10 +258,11 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
             onAddContent={() => openContentModal(ch.id)}
             onDelete={() => handleDeleteChapter(ch.id)}
             onRename={(t) => handleRenameChapter(ch.id, t)}
-            onMoveUp={() => handleMoveChapter(ch.id, -1)}
-            onMoveDown={() => handleMoveChapter(ch.id, +1)}
-            canMoveUp={i > 0}
-            canMoveDown={i < chapters.length - 1}
+            isDragged={draggedId === ch.id}
+            isDragActive={draggedId !== null}
+            onDragStart={() => setDraggedId(ch.id)}
+            onDragOverCard={() => handleDragOverChapter(ch.id)}
+            onDragEnd={() => setDraggedId(null)}
             briefsDone={(ch.cases || []).filter(c => { const b = (course.briefs || {})[c]; return b && (b.facts || b.holding); }).length}
             briefsTotal={(ch.cases || []).length}
             onNavigateToCase={onNavigateToCase}
@@ -310,27 +313,15 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
 }
 
 // ── Chapter Card ──────────────────────────────────────────────────────────────
-function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRename, onMoveUp, onMoveDown, canMoveUp, canMoveDown, briefsDone = 0, briefsTotal = 0, onNavigateToCase }) {
+function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRename, isDragged, isDragActive, onDragStart, onDragOverCard, onDragEnd, briefsDone = 0, briefsTotal = 0, onNavigateToCase }) {
   const hasContent = chapter.contentStatus === 'complete';
   const caseCount  = chapter.cases?.length || 0;
-  const [menuOpen,    setMenuOpen]    = useTBState(false);
-  const [renaming,    setRenaming]    = useTBState(false);
-  const [draftTitle,  setDraftTitle]  = useTBState('');
-  const menuRef = useTBRef(null);
-
-  React.useEffect(() => {
-    if (!menuOpen) return;
-    function handler(e) {
-      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
-    }
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [menuOpen]);
+  const [renaming,   setRenaming]   = useTBState(false);
+  const [draftTitle, setDraftTitle] = useTBState('');
 
   function startRename() {
     setDraftTitle(chapter.title || '');
     setRenaming(true);
-    setMenuOpen(false);
   }
   function commitRename() {
     const t = draftTitle.trim();
@@ -342,10 +333,36 @@ function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRe
     setDraftTitle('');
   }
 
+  function handleHandleDragStart(e) {
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', chapter.id); } catch (_) { /* Firefox quirk */ }
+    onDragStart?.();
+  }
+  function handleCardDragOver(e) {
+    if (!isDragActive) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    onDragOverCard?.();
+  }
+
   return (
-    <div style={{ ...tbS.card, ...(expanded ? tbS.cardOpen : {}) }}>
+    <div
+      style={{ ...tbS.card, ...(expanded ? tbS.cardOpen : {}), ...(isDragged ? tbS.cardDragging : {}) }}
+      onDragOver={handleCardDragOver}
+      onDrop={(e) => { if (isDragActive) e.preventDefault(); }}
+    >
       <div style={tbS.cardHeader} onClick={renaming ? undefined : onExpand}>
-        <div style={tbS.chNum}>{chapter.number}</div>
+        <div
+          style={{ ...tbS.chNum, ...tbS.chNumHandle, ...(isDragged ? tbS.chNumDragging : {}) }}
+          draggable={!renaming}
+          onDragStart={handleHandleDragStart}
+          onDragEnd={() => onDragEnd?.()}
+          onClick={e => e.stopPropagation()}
+          title="Drag to reorder"
+          aria-label={`Drag handle for chapter ${chapter.number}`}
+        >
+          {chapter.number}
+        </div>
         <div style={tbS.cardInfo}>
           {renaming ? (
             <input
@@ -362,7 +379,13 @@ function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRe
               autoFocus
             />
           ) : (
-            <div style={tbS.cardTitle}>{fmtTitle(chapter.title)}</div>
+            <div
+              style={tbS.cardTitle}
+              onDoubleClick={(e) => { e.stopPropagation(); startRename(); }}
+              title="Double-click to rename"
+            >
+              {fmtTitle(chapter.title)}
+            </div>
           )}
           <div style={tbS.cardMeta}>
             {chapter.isCustom && <span style={tbS.customTag}>Custom</span>}
@@ -378,38 +401,6 @@ function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRe
           <button style={tbS.iconBtn} onClick={onAddContent} title={hasContent ? 'Edit content' : 'Add content'}>
             {hasContent ? '✎' : '+'}
           </button>
-          <div ref={menuRef} style={tbS.menuWrap}>
-            <button
-              style={{ ...tbS.iconBtn, ...(menuOpen ? tbS.iconBtnActive : {}) }}
-              onClick={() => setMenuOpen(o => !o)}
-              title="More actions"
-              aria-label="More actions"
-              aria-expanded={menuOpen}
-            >⋮</button>
-            {menuOpen && (
-              <div style={tbS.menuPopover} role="menu">
-                <button style={tbS.menuItem} onClick={startRename} role="menuitem">
-                  <span style={tbS.menuIcon}>✎</span> Rename
-                </button>
-                <button
-                  style={{ ...tbS.menuItem, ...(canMoveUp ? {} : tbS.menuItemDisabled) }}
-                  onClick={() => { if (canMoveUp) { onMoveUp?.(); setMenuOpen(false); } }}
-                  disabled={!canMoveUp}
-                  role="menuitem"
-                >
-                  <span style={tbS.menuIcon}>↑</span> Move up
-                </button>
-                <button
-                  style={{ ...tbS.menuItem, ...(canMoveDown ? {} : tbS.menuItemDisabled) }}
-                  onClick={() => { if (canMoveDown) { onMoveDown?.(); setMenuOpen(false); } }}
-                  disabled={!canMoveDown}
-                  role="menuitem"
-                >
-                  <span style={tbS.menuIcon}>↓</span> Move down
-                </button>
-              </div>
-            )}
-          </div>
           <button style={{ ...tbS.iconBtn, color: '#C0392B' }} onClick={onDelete} title="Delete chapter">✕</button>
         </div>
         <span style={{ ...tbS.chevron, ...(expanded ? tbS.chevronOpen : {}) }}>›</span>
@@ -640,22 +631,19 @@ const tbS = {
   root:    { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   toolbar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 36px', borderBottom: '1px solid #E2D9CC' },
   list: { flex: 1, overflowY: 'auto', padding: '18px 36px 48px' },
-  card: { background: 'white', borderRadius: 8, border: '1px solid #E2D9CC', marginBottom: 6, transition: 'box-shadow .15s', position: 'relative' },
+  card: { background: 'white', borderRadius: 8, border: '1px solid #E2D9CC', marginBottom: 6, transition: 'box-shadow .15s, opacity .15s, transform .15s', position: 'relative' },
   cardOpen: { boxShadow: '0 3px 18px rgba(26,39,68,.08)' },
+  cardDragging: { opacity: 0.45 },
   cardHeader: { display: 'flex', alignItems: 'center', gap: 14, padding: '15px 18px', cursor: 'pointer', userSelect: 'none' },
   chNum: { width: 28, height: 28, borderRadius: '50%', background: '#1A1714', color: '#F8F6F1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '"Lora", Georgia, serif', fontSize: 11.5, fontWeight: 700, flexShrink: 0 },
+  chNumHandle: { cursor: 'grab', transition: 'transform .12s, box-shadow .12s' },
+  chNumDragging: { cursor: 'grabbing', boxShadow: '0 4px 14px rgba(26,23,20,.4)', transform: 'scale(1.06)' },
   cardInfo: { flex: 1, minWidth: 0 },
   cardTitle: { fontSize: 15.5, fontWeight: 700, color: '#1A1714', lineHeight: 1.35, fontFamily: '"Lora", "Lora", Georgia, serif' },
   cardMeta:  { fontSize: 12.5, color: '#5A4A35', fontWeight: 500, marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap' },
   customTag: { background: '#FDF3E0', color: '#2A6049', padding: '1px 6px', borderRadius: 3, border: '1px solid #E8D5A0', fontWeight: 600, fontSize: 11 },
   cardBtns: { display: 'flex', gap: 4 },
   iconBtn:  { background: 'none', border: '1px solid #E2D9CC', borderRadius: 4, width: 27, height: 27, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#4A3D30', fontSize: 13 },
-  iconBtnActive: { background: '#F5EFE6', borderColor: '#C8BEA8' },
-  menuWrap: { position: 'relative', display: 'inline-block' },
-  menuPopover: { position: 'absolute', right: 0, top: 'calc(100% + 4px)', background: 'white', border: '1px solid #E2D9CC', borderRadius: 6, boxShadow: '0 8px 24px rgba(26,39,68,.14)', minWidth: 150, zIndex: 50, overflow: 'hidden', padding: 4 },
-  menuItem: { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px', background: 'none', border: 'none', borderRadius: 4, textAlign: 'left', fontSize: 13, color: '#1A1714', cursor: 'pointer', fontFamily: 'inherit' },
-  menuItemDisabled: { color: '#C8BEA8', cursor: 'not-allowed' },
-  menuIcon: { display: 'inline-block', width: 14, textAlign: 'center', fontSize: 12 },
   renameInput: { width: '100%', boxSizing: 'border-box', padding: '6px 10px', borderRadius: 5, border: '1px solid #2A6049', fontSize: 14.5, fontWeight: 700, color: '#1A1714', fontFamily: '"Lora", "Lora", Georgia, serif', background: 'white', outline: 'none' },
   chevron:     { fontSize: 18, color: '#C8A84C', transform: 'rotate(0deg)', transition: 'transform .2s', marginLeft: 2 },
   chevronOpen: { transform: 'rotate(90deg)' },
