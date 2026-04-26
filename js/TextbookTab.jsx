@@ -640,7 +640,7 @@ const tbS = {
   root:    { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   toolbar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 36px', borderBottom: '1px solid #E2D9CC' },
   list: { flex: 1, overflowY: 'auto', padding: '18px 36px 48px' },
-  card: { background: 'white', borderRadius: 8, border: '1px solid #E2D9CC', marginBottom: 6, overflow: 'hidden', transition: 'box-shadow .15s' },
+  card: { background: 'white', borderRadius: 8, border: '1px solid #E2D9CC', marginBottom: 6, transition: 'box-shadow .15s', position: 'relative' },
   cardOpen: { boxShadow: '0 3px 18px rgba(26,39,68,.08)' },
   cardHeader: { display: 'flex', alignItems: 'center', gap: 14, padding: '15px 18px', cursor: 'pointer', userSelect: 'none' },
   chNum: { width: 28, height: 28, borderRadius: '50%', background: '#1A1714', color: '#F8F6F1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '"Lora", Georgia, serif', fontSize: 11.5, fontWeight: 700, flexShrink: 0 },
