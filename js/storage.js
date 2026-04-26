@@ -1026,6 +1026,7 @@ async function generateQuizBatch({
   content, batchIndex, totalBatches, batchSize, questionType, chapterTitle,
   previousQuestions = [], allChapterQuestions = [], focusArea = '',
   chunkCatalog = null,   // optional: array of {topic, type, importance} for this chunk
+  targetTopics = null,   // optional: when set, switches to MAKEUP mode — one question per listed topic
 }) {
   const typeInstruction = {
     fact:        `Generate ${batchSize} FACT-BASED questions. Each must test specific rules, legal standards, case holdings, statutory elements, or doctrinal definitions. Tag each with "qtype":"fact".`,
@@ -1064,14 +1065,30 @@ The student has requested that questions focus specifically on: "${focusArea.tri
 Chapter content:
 ${content}`;
 
-  const catalogList = formatCatalogForPrompt(chunkCatalog);
-  const catalogBlock = catalogList
-    ? `═══ TOPIC CHECKLIST FOR THIS SECTION — every topic must be tested across the run ═══
+  // Coverage instruction — switches to MAKEUP mode when targetTopics is provided
+  // (post-audit fill-the-gaps pass), otherwise uses the standard chunk catalog.
+  let catalogBlock = '';
+  if (targetTopics && targetTopics.length > 0) {
+    const targetList = targetTopics
+      .map((t, i) => `${i + 1}. [${t.type}, ${t.importance}] ${t.topic}`)
+      .join('\n');
+    catalogBlock = `═══ MAKEUP PASS — fill these specific coverage gaps ═══
+A prior coverage audit flagged the following topics as missing from earlier batches on this chapter. Generate ONE high-quality question per topic listed below. The question must directly test the listed topic — not adjacently, not via incidental overlap with other topics. Use whichever question type (fact or application) best tests each topic; tag each question with the appropriate "qtype" and use the listed topic label (verbatim) as the "topic" field of the question.
+
+${targetList}
+
+If a listed topic genuinely doesn't warrant a separate question (e.g. it overlaps almost completely with another listed topic), you may collapse two adjacent topics into a single synthesis question — but err on the side of inclusion: these are flagged gaps and the student needs them tested.
+`;
+  } else {
+    const catalogList = formatCatalogForPrompt(chunkCatalog);
+    if (catalogList) {
+      catalogBlock = `═══ TOPIC CHECKLIST FOR THIS SECTION — every topic must be tested across the run ═══
 A separate cataloging pass identified these topics in this section. Use this list as your authoritative coverage checklist alongside the chapter content. The "ALREADY COVERED" list below tells you which topics are already done; pick from this checklist for the rest. If you discover a substantive topic missing from the checklist, still test it — the checklist is a floor, not a ceiling.
 
 ${catalogList}
-`
-    : '';
+`;
+    }
+  }
 
   // Fresh block: per-batch state. Changes every call, so not cached.
   const batchBlock =
@@ -1328,12 +1345,13 @@ async function generateQuizForChapter({
   // generated questions and surfaces gaps. Soft failure: errors are logged and
   // the audit is reported as unavailable, but the questions themselves still
   // ship to the user.
+  let audit = null;
   if (!shouldCancel() && allQuestions.length > 0) {
     const totalCatalogTopics = catalog.perChunk.reduce((s, c) => s + (c?.length || 0), 0);
     if (totalCatalogTopics > 0) {
       onStatus({ phase: 'audit', totalTopics: totalCatalogTopics });
       try {
-        const audit = await runCoverageAudit({
+        audit = await runCoverageAudit({
           chunks,
           perChunkCatalogs:   catalog.perChunk,
           generatedQuestions: allQuestions,
@@ -1344,6 +1362,73 @@ async function generateQuizForChapter({
         console.warn(`Coverage audit failed for "${chapterTitle}":`, e.message);
         onStatus({ phase: 'audit-warning', error: e.message });
       }
+    }
+  }
+
+  // Makeup pass — run targeted batches for any topics the audit flagged as
+  // uncovered. Each chunk that has uncovered topics gets one makeup batch
+  // focused only on those topics. Soft-fail per chunk so a single failure
+  // doesn't lose progress on the others.
+  if (!shouldCancel() && audit && audit.uncovered && audit.uncovered.length > 0) {
+    // Map section labels (as the audit emits them) back to chunk indices.
+    const sectionToChunk = new Map();
+    chunks.forEach((c, ci) => {
+      const label = c.pageRange
+        ? `pages ${c.pageRange.start}–${c.pageRange.end}`
+        : (chunks.length > 1 ? `section ${ci + 1}` : 'whole chapter');
+      sectionToChunk.set(label, ci);
+    });
+
+    // Group uncovered topics by chunk, dropping any whose section we can't resolve.
+    const byChunk = new Map();
+    audit.uncovered.forEach(t => {
+      const ci = sectionToChunk.get(t.section);
+      if (ci === undefined) return;
+      if (!byChunk.has(ci)) byChunk.set(ci, []);
+      byChunk.get(ci).push(t);
+    });
+
+    if (byChunk.size > 0) {
+      onStatus({ phase: 'makeup', topicCount: audit.uncovered.length, chunkCount: byChunk.size });
+      let makeupCount = 0;
+      for (const [ci, topicsForChunk] of byChunk) {
+        if (shouldCancel()) break;
+        const chunk = chunks[ci];
+        const chunkLabel = chunk.pageRange
+          ? `${chapterTitle} (pages ${chunk.pageRange.start}–${chunk.pageRange.end})`
+          : (chunks.length > 1 ? `${chapterTitle} (section ${ci + 1} of ${chunks.length})` : chapterTitle);
+        try {
+          const makeupBatch = await generateQuizBatch({
+            content:    chunk.content,
+            batchIndex: 0,
+            totalBatches: 1,
+            batchSize:  topicsForChunk.length,
+            questionType,
+            chapterTitle: chunkLabel,
+            previousQuestions: allQuestions,   // includes earlier makeup batches by the time we reach later chunks
+            allChapterQuestions,
+            focusArea,
+            chunkCatalog: catalog.perChunk[ci] || null,
+            targetTopics: topicsForChunk,
+          });
+          allQuestions.push(...makeupBatch);
+          makeupCount += makeupBatch.length;
+          onBatch(makeupBatch, {
+            phase: 'makeup',
+            chunkIndex: ci, totalChunks: chunks.length,
+            batchIndex: 0, totalBatches: 1,
+            pageRange: chunk.pageRange,
+          });
+        } catch (e) {
+          console.warn(`Makeup batch for chunk ${ci} of "${chapterTitle}" failed:`, e.message);
+          onStatus({
+            phase: 'makeup-warning',
+            chunkIndex: ci, totalChunks: chunks.length,
+            error: e.message,
+          });
+        }
+      }
+      onStatus({ phase: 'makeup-done', questionCount: makeupCount });
     }
   }
 
