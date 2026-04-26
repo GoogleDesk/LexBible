@@ -495,7 +495,12 @@ function QuizTab({ course, onUpdate }) {
                 else                          st = { ...qS.choice, opacity: 0.42 };
               }
               return (
-                <button key={letter} style={st} onClick={(e) => { answer(letter); e.currentTarget.blur(); }}>
+                <button
+                  key={letter}
+                  style={st}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={(e) => { answer(letter); e.currentTarget.blur(); }}
+                >
                   <span style={{ ...qS.choiceLetter, background: hasAnswered ? (isCorrect ? '#4A7C59' : isSelected ? '#C0392B' : '#9BAAC0') : '#1A1714' }}>
                     {letter}
                   </span>
