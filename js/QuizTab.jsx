@@ -54,8 +54,10 @@ function QuizTab({ course, onUpdate }) {
 
   const chapters  = (course.chapters || []).filter(c => c.content?.trim());
   const quizData  = course.quizzes || {}; // { [chId]: { sets: [...] } }
-  const hasApiKey = !!window.LexStore.loadApiKey();
-  const maxQ      = hasApiKey ? 500 : 30;
+  const hasApiKey       = !!window.LexStore.loadApiKey();
+  const hasBuiltIn      = window.LexStore.builtInAvailable();
+  const canGenerate     = hasApiKey || hasBuiltIn;
+  const maxQ            = hasApiKey ? 500 : 30;
 
   // ── Persist session progress to store ────────────────────────────────────
   function persistProgress(sess) {
@@ -209,6 +211,14 @@ function QuizTab({ course, onUpdate }) {
   // ── Generation ────────────────────────────────────────────────────────────
   async function generate() {
     if (!selChapter) return;
+    if (!canGenerate) {
+      setGenReport({
+        setId: null, chId: selChapter, factCount: 0, appCount: 0, ccCount: 0, total: 0,
+        label: '',
+        warnings: ['Anthropic API key required. Add yours via the sidebar (⚙) to generate quizzes.'],
+      });
+      return;
+    }
     const ch      = course.chapters.find(c => c.id === selChapter);
     const count   = Math.min(settings.count, maxQ);
     const BATCH   = hasApiKey ? 20 : 8;
@@ -565,7 +575,8 @@ function QuizTab({ course, onUpdate }) {
         selChapter={selChapter} setSelChapter={setSelChapter}
         chDropOpen={chDropOpen} setChDropOpen={setChDropOpen}
         settings={settings} setSettings={setSettings}
-        hasApiKey={hasApiKey} maxQ={maxQ} generate={generate}
+        hasApiKey={hasApiKey} hasBuiltIn={hasBuiltIn} canGenerate={canGenerate}
+        maxQ={maxQ} generate={generate}
       />
 
       {/* Question Banks — grouped by chapter */}
@@ -647,7 +658,7 @@ function QuizTab({ course, onUpdate }) {
 
 // ── Setup screen ──────────────────────────────────────────────────────────────
 // (inline component so it can have its own focusOpen state)
-function QuizSetupCard({ chapters, quizData, selChapter, setSelChapter, chDropOpen, setChDropOpen, settings, setSettings, hasApiKey, maxQ, generate, genReport, setGenReport, startSession }) {
+function QuizSetupCard({ chapters, quizData, selChapter, setSelChapter, chDropOpen, setChDropOpen, settings, setSettings, hasApiKey, hasBuiltIn, canGenerate, maxQ, generate, genReport, setGenReport, startSession }) {
   const [focusOpen, setFocusOpen] = useQState(false);
 
   // Compute chunking preview when an oversize chapter is selected.
@@ -670,8 +681,11 @@ function QuizSetupCard({ chapters, quizData, selChapter, setSelChapter, chDropOp
     <div style={qS.setupCard}>
       <div style={qS.setupTitle}>Generate a New Quiz</div>
 
-      {!hasApiKey && (
+      {!hasApiKey && hasBuiltIn && (
         <div style={qS.apiWarning}>⚙ No API key — capped at 30 questions. Add your key via ⚙ in the sidebar for up to 500.</div>
+      )}
+      {!canGenerate && (
+        <div style={qS.apiWarning}>⚙ Anthropic API key required — please add yours via ⚙ in the sidebar to generate quizzes.</div>
       )}
 
       {/* Row 1: Chapter selector */}
@@ -768,8 +782,9 @@ function QuizSetupCard({ chapters, quizData, selChapter, setSelChapter, chDropOp
 
       <div style={{ display:'flex', alignItems:'center', gap:12 }}>
         <button
-          style={{ ...qS.btnPrimary, padding:'11px 28px', fontSize:14, opacity: selChapter ? 1 : 0.4, cursor: selChapter ? 'pointer' : 'not-allowed' }}
-          onClick={selChapter ? generate : undefined}
+          style={{ ...qS.btnPrimary, padding:'11px 28px', fontSize:14, opacity: (selChapter && canGenerate) ? 1 : 0.4, cursor: (selChapter && canGenerate) ? 'pointer' : 'not-allowed' }}
+          onClick={(selChapter && canGenerate) ? generate : undefined}
+          title={!canGenerate ? 'Add an Anthropic API key to enable generation' : undefined}
         >
           ✦ Generate {Math.min(settings.count, maxQ)} Questions
         </button>

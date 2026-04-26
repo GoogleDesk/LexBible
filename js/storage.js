@@ -239,7 +239,21 @@ async function callAnthropicAPI(apiKey, {
   };
 }
 
-async function callBuiltIn(prompt) { return window.claude.complete(prompt); }
+function builtInAvailable() {
+  return typeof window !== 'undefined'
+    && window.claude
+    && typeof window.claude.complete === 'function';
+}
+
+async function callBuiltIn(prompt) {
+  if (!builtInAvailable()) {
+    throw new Error(
+      'No Anthropic API key set, and the built-in Claude integration is not available in this environment. ' +
+      'Add your Anthropic API key via the sidebar (⚙) to enable quiz generation.'
+    );
+  }
+  return window.claude.complete(prompt);
+}
 
 // Simple string-in / string-out shim used by single-prompt callers (TOC, briefs, red-flag).
 async function callClaude(prompt, maxTokens = 16000) {
@@ -1557,7 +1571,7 @@ window.LexStore = {
   loadData, saveData,
   loadApiKey, saveApiKey,
   initCloud, clearCloud, flushPendingSave,
-  callClaude, callClaudeRich, callAnthropicAPI, callBuiltIn,
+  callClaude, callClaudeRich, callAnthropicAPI, callBuiltIn, builtInAvailable,
   parseTOC, basicCleanTOC, basicCleanContent,
   aiCleanTOC,
   extractCasesFromContent,
