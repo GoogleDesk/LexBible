@@ -495,7 +495,7 @@ function QuizTab({ course, onUpdate }) {
                 else                          st = { ...qS.choice, opacity: 0.42 };
               }
               return (
-                <button key={letter} style={st} onClick={() => answer(letter)}>
+                <button key={letter} style={st} onClick={(e) => { answer(letter); e.currentTarget.blur(); }}>
                   <span style={{ ...qS.choiceLetter, background: hasAnswered ? (isCorrect ? '#4A7C59' : isSelected ? '#C0392B' : '#9BAAC0') : '#1A1714' }}>
                     {letter}
                   </span>
@@ -981,7 +981,7 @@ const qS = {
   flagBtn:  { padding:'5px 11px', borderRadius:6, border:'1px solid #E2D9CC', background:'none', cursor:'pointer', fontSize:12, color:'#5A4538', flexShrink:0 },
   flagBtnActive:{ background:'#FDF3E0', borderColor:'#2A6049', color:'#2A6049', fontWeight:600 },
   choices:  { display:'flex', flexDirection:'column', gap:8 },
-  choice:   { display:'flex', alignItems:'flex-start', gap:12, padding:'12px 14px', borderRadius:8, border:'1.5px solid #E2D9CC', background:'none', cursor:'pointer', textAlign:'left', width:'100%', outline:'none' },
+  choice:   { display:'flex', alignItems:'flex-start', gap:12, padding:'12px 14px', borderRadius:8, border:'1.5px solid #E2D9CC', background:'none', cursor:'pointer', textAlign:'left', width:'100%', outline:'none', WebkitTapHighlightColor:'transparent' },
   choiceRight:{ background:'#EFF8F1', borderColor:'#4A7C59', boxShadow:'0 0 0 2px rgba(74,124,89,.18)' },
   choiceWrong:{ background:'#FEF0EE', borderColor:'#C0392B' },
   choiceLetter:{ width:28, height:28, borderRadius:'50%', color:'white', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:12.5, flexShrink:0 },
