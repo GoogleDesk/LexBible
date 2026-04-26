@@ -506,7 +506,7 @@ function QuizTab({ course, onUpdate }) {
                 else                          st = { ...qS.choice, opacity: 0.42 };
               }
               return (
-                <button key={letter} style={st} onClick={() => answer(letter)}>
+                <button key={letter} style={st} onClick={(e) => { answer(letter); e.currentTarget.blur(); }}>
                   <span style={{ ...qS.choiceLetter, background: hasAnswered ? (isCorrect ? '#4A7C59' : isSelected ? '#C0392B' : '#9BAAC0') : '#1A1714' }}>
                     {letter}
                   </span>
@@ -623,20 +623,28 @@ function QuizTab({ course, onUpdate }) {
                   <>
                     {chData.sets.map((set) => {
                   const lastSess    = set.sessions?.slice(-1)[0];
-                  const lastPct     = lastSess ? Math.round(lastSess.score / lastSess.total * 100) : null;
                   const wrongCount  = Object.keys(set.wrongBank || {}).length;
                   const flagCount   = (set.flagged || []).length;
-                  const inProgress  = set.progress && Object.keys(set.progress.answers || {}).length > 0 && !set.sessions?.length;
                   const resumeIdx   = set.progress?.idx || 0;
                   const resumeCount = Object.keys(set.progress?.answers || {}).length;
+                  const totalQs     = set.questions.length;
+                  const allAnswered = totalQs > 0 && resumeCount === totalQs;
 
                   const typeLabel = set.settings?.type === 'fact' ? 'fact-based' : set.settings?.type === 'application' ? 'application' : 'mixed';
-                  const isDone = set.sessions?.length > 0;
+                  // Treat as done if explicitly finished OR every question has an answer.
+                  const isDone     = (set.sessions?.length > 0) || allAnswered;
+                  const inProgress = !isDone && resumeCount > 0;
+                  const displayPct = lastSess
+                    ? Math.round(lastSess.score / lastSess.total * 100)
+                    : (allAnswered && totalQs > 0
+                        ? Math.round(((set.progress?.score) ?? 0) / totalQs * 100)
+                        : null);
+
                   const metaText = isDone
-                    ? `${lastPct}% · ${set.questions.length} questions · ${typeLabel}`
+                    ? `${displayPct ?? 0}% · ${totalQs} questions · ${typeLabel}`
                     : inProgress
-                      ? `${resumeCount}/${set.questions.length} answered · ${typeLabel}`
-                      : `${set.questions.length} questions · ${typeLabel}`;
+                      ? `${resumeCount}/${totalQs} answered · ${typeLabel}`
+                      : `${totalQs} questions · ${typeLabel}`;
 
                   return (
                     <div key={set.id} style={qS.setRow}>
@@ -984,7 +992,7 @@ const qS = {
   flagBtn:  { padding:'5px 11px', borderRadius:6, border:'1px solid #E2D9CC', background:'none', cursor:'pointer', fontSize:12, color:'#5A4538', flexShrink:0 },
   flagBtnActive:{ background:'#FDF3E0', borderColor:'#2A6049', color:'#2A6049', fontWeight:600 },
   choices:  { display:'flex', flexDirection:'column', gap:8 },
-  choice:   { display:'flex', alignItems:'flex-start', gap:12, padding:'12px 14px', borderRadius:8, border:'1.5px solid #E2D9CC', background:'none', cursor:'pointer', textAlign:'left', width:'100%', outline:'none' },
+  choice:   { display:'flex', alignItems:'flex-start', gap:12, padding:'12px 14px', borderRadius:8, border:'1.5px solid #E2D9CC', background:'none', cursor:'pointer', textAlign:'left', width:'100%', outline:'none', WebkitTapHighlightColor:'transparent' },
   choiceRight:{ background:'#EFF8F1', borderColor:'#4A7C59', boxShadow:'0 0 0 2px rgba(74,124,89,.18)' },
   choiceWrong:{ background:'#FEF0EE', borderColor:'#C0392B' },
   choiceLetter:{ width:28, height:28, borderRadius:'50%', color:'white', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:12.5, flexShrink:0 },

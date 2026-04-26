@@ -125,23 +125,42 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
   }
 
   // ── Content: clean then save ──────────────────────────────────────────────
-  async function handleSaveContent(chapterId) {
-    if (!contentText.trim()) return;
-    try {
-      let cleaned = contentText;
+  async function handleSaveContent(chapterId, newTitle) {
+    const ch = chapters.find(c => c.id === chapterId);
+    if (!ch) return;
+    const trimmedTitle = (newTitle || '').trim();
+    const titleToUse   = trimmedTitle || ch.title;
+    const titleChanged = !!trimmedTitle && trimmedTitle !== ch.title;
+    const hasContent   = contentText.trim().length > 0;
 
+    if (!hasContent && !titleChanged) {
+      setShowContentModal(null);
+      setContentText('');
+      return;
+    }
+
+    // Rename-only path: chapter has no new content to process.
+    if (!hasContent) {
+      onUpdate({
+        chapters: chapters.map(c => c.id === chapterId ? { ...c, title: titleToUse } : c),
+      });
+      setShowContentModal(null);
+      setContentText('');
+      return;
+    }
+
+    try {
       // Always use basic cleanup for content — fast, free, good enough.
       // Claude reads the content for quiz generation and handles minor messiness fine.
       setPhase('cleaning');
       setStatusMsg('Saving chapter…');
-      cleaned = window.LexStore.basicCleanContent(contentText);
+      const cleaned = window.LexStore.basicCleanContent(contentText);
 
       setPhase('saving');
       setStatusMsg('Extracting fully-presented cases…');
 
       // Only extract cases with court + citation (fully presented, not mere references)
       const extracted = window.LexStore.extractCasesFromContent(cleaned);
-      const ch = chapters.find(c => c.id === chapterId);
       const allCases = [...new Set([...(ch.cases || []), ...extracted])];
       const newBriefs = { ...(course.briefs || {}) };
       allCases.forEach(c => { if (!newBriefs[c]) newBriefs[c] = emptyBrief(chapterId); });
@@ -149,7 +168,7 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
       onUpdate({
         chapters: chapters.map(c =>
           c.id === chapterId
-            ? { ...c, content: cleaned, cases: allCases, contentStatus: 'complete' }
+            ? { ...c, title: titleToUse, content: cleaned, cases: allCases, contentStatus: 'complete' }
             : c
         ),
         briefs: newBriefs,
@@ -178,14 +197,6 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
   function handleDeleteChapter(chId) {
     if (!confirm('Delete this chapter and all its data?')) return;
     onUpdate({ chapters: chapters.filter(c => c.id !== chId) });
-  }
-
-  function handleRenameChapter(chId, newTitle) {
-    const t = (newTitle || '').trim();
-    if (!t) return;
-    onUpdate({
-      chapters: chapters.map(c => c.id === chId ? { ...c, title: t } : c),
-    });
   }
 
   function handleDragOverChapter(targetId) {
@@ -255,9 +266,8 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
             key={ch.id} chapter={ch}
             expanded={expandedChapter === ch.id}
             onExpand={() => setExpandedChapter(expandedChapter === ch.id ? null : ch.id)}
-            onAddContent={() => openContentModal(ch.id)}
+            onEditChapter={() => openContentModal(ch.id)}
             onDelete={() => handleDeleteChapter(ch.id)}
-            onRename={(t) => handleRenameChapter(ch.id, t)}
             isDragged={draggedId === ch.id}
             isDragActive={draggedId !== null}
             onDragStart={() => setDraggedId(ch.id)}
@@ -303,7 +313,7 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
         <ContentModal
           chapter={chapters.find(c => c.id === showContentModal)}
           value={contentText} onChange={setContentText}
-          onSubmit={() => handleSaveContent(showContentModal)}
+          onSubmit={(newTitle) => handleSaveContent(showContentModal, newTitle)}
           onClose={() => { setShowContentModal(null); setContentText(''); setPhase('idle'); setStatusMsg(''); }}
           busy={busy} statusMsg={statusMsg} hasApiKey={hasApiKey}
         />
@@ -313,25 +323,9 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
 }
 
 // ── Chapter Card ──────────────────────────────────────────────────────────────
-function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRename, isDragged, isDragActive, onDragStart, onDragOverCard, onDragEnd, briefsDone = 0, briefsTotal = 0, onNavigateToCase }) {
+function ChapterCard({ chapter, expanded, onExpand, onEditChapter, onDelete, isDragged, isDragActive, onDragStart, onDragOverCard, onDragEnd, briefsDone = 0, briefsTotal = 0, onNavigateToCase }) {
   const hasContent = chapter.contentStatus === 'complete';
   const caseCount  = chapter.cases?.length || 0;
-  const [renaming,   setRenaming]   = useTBState(false);
-  const [draftTitle, setDraftTitle] = useTBState('');
-
-  function startRename() {
-    setDraftTitle(chapter.title || '');
-    setRenaming(true);
-  }
-  function commitRename() {
-    const t = draftTitle.trim();
-    if (t && t !== chapter.title) onRename?.(t);
-    setRenaming(false);
-  }
-  function cancelRename() {
-    setRenaming(false);
-    setDraftTitle('');
-  }
 
   function handleHandleDragStart(e) {
     e.dataTransfer.effectAllowed = 'move';
@@ -351,10 +345,10 @@ function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRe
       onDragOver={handleCardDragOver}
       onDrop={(e) => { if (isDragActive) e.preventDefault(); }}
     >
-      <div style={tbS.cardHeader} onClick={renaming ? undefined : onExpand}>
+      <div style={tbS.cardHeader} onClick={onExpand}>
         <div
           style={{ ...tbS.chNum, ...tbS.chNumHandle, ...(isDragged ? tbS.chNumDragging : {}) }}
-          draggable={!renaming}
+          draggable={true}
           onDragStart={handleHandleDragStart}
           onDragEnd={() => onDragEnd?.()}
           onClick={e => e.stopPropagation()}
@@ -364,29 +358,7 @@ function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRe
           {chapter.number}
         </div>
         <div style={tbS.cardInfo}>
-          {renaming ? (
-            <input
-              style={tbS.renameInput}
-              value={draftTitle}
-              onChange={e => setDraftTitle(e.target.value)}
-              onClick={e => e.stopPropagation()}
-              onKeyDown={e => {
-                e.stopPropagation();
-                if (e.key === 'Enter')  commitRename();
-                if (e.key === 'Escape') cancelRename();
-              }}
-              onBlur={commitRename}
-              autoFocus
-            />
-          ) : (
-            <div
-              style={tbS.cardTitle}
-              onDoubleClick={(e) => { e.stopPropagation(); startRename(); }}
-              title="Double-click to rename"
-            >
-              {fmtTitle(chapter.title)}
-            </div>
-          )}
+          <div style={tbS.cardTitle}>{fmtTitle(chapter.title)}</div>
           <div style={tbS.cardMeta}>
             {chapter.isCustom && <span style={tbS.customTag}>Custom</span>}
             {hasContent && briefsTotal > 0
@@ -398,9 +370,7 @@ function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRe
           </div>
         </div>
         <div style={tbS.cardBtns} onClick={e => e.stopPropagation()}>
-          <button style={tbS.iconBtn} onClick={onAddContent} title={hasContent ? 'Edit content' : 'Add content'}>
-            {hasContent ? '✎' : '+'}
-          </button>
+          <button style={tbS.iconBtn} onClick={onEditChapter} title="Edit chapter">✎</button>
           <button style={{ ...tbS.iconBtn, color: '#C0392B' }} onClick={onDelete} title="Delete chapter">✕</button>
         </div>
         <span style={{ ...tbS.chevron, ...(expanded ? tbS.chevronOpen : {}) }}>›</span>
@@ -427,7 +397,7 @@ function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRe
             </div>
           )}
           {!hasContent && (
-            <button style={{ ...tbS.btnPrimary, marginTop: 14 }} onClick={onAddContent}>
+            <button style={{ ...tbS.btnPrimary, marginTop: 14 }} onClick={onEditChapter}>
               + Paste Chapter Content
             </button>
           )}
@@ -530,7 +500,15 @@ function TOCModal({ tocText, setTocText, onSubmit, onClose, busy, statusMsg, has
 function ContentModal({ chapter, value, onChange, onSubmit, onClose, busy, statusMsg, hasApiKey }) {
   const [fileLoading, setFileLoading] = useTBState(false);
   const [fileError,   setFileError]   = useTBState('');
+  const [draftTitle,  setDraftTitle]  = useTBState(chapter?.title || '');
+  const [titleFocused, setTitleFocused] = useTBState(false);
   const fileRef = useTBRef(null);
+
+  React.useEffect(() => { setDraftTitle(chapter?.title || ''); }, [chapter?.id]);
+
+  const trimmedTitle = draftTitle.trim();
+  const titleChanged = !!trimmedTitle && trimmedTitle !== chapter?.title;
+  const canSave      = !busy && !fileLoading && (value.trim().length > 0 || titleChanged);
 
   async function handleFile(e) {
     const file = e.target.files?.[0];
@@ -559,7 +537,17 @@ function ContentModal({ chapter, value, onChange, onSubmit, onClose, busy, statu
     <div style={tbS.overlay}>
       <div style={{ ...tbS.modal, maxWidth: 800 }}>
         <div style={tbS.modalHead}>
-          <div style={tbS.modalTitle}>Add Content — {chapter?.title}</div>
+          <input
+            style={{ ...tbS.modalTitleInput, ...(titleFocused ? tbS.modalTitleInputFocused : {}) }}
+            value={draftTitle}
+            onChange={e => setDraftTitle(e.target.value)}
+            onFocus={e => { setTitleFocused(true); e.target.select(); }}
+            onBlur={() => setTitleFocused(false)}
+            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+            disabled={busy}
+            placeholder="Chapter name"
+            aria-label="Chapter name"
+          />
           <button style={tbS.modalX} onClick={onClose} disabled={busy}>✕</button>
         </div>
         <div style={tbS.modalBody}>
@@ -607,8 +595,12 @@ function ContentModal({ chapter, value, onChange, onSubmit, onClose, busy, statu
         </div>
         <div style={tbS.modalFoot}>
           <button style={tbS.btnGhost}   onClick={onClose} disabled={busy}>Cancel</button>
-          <button style={tbS.btnPrimary} onClick={onSubmit} disabled={!value.trim() || busy || fileLoading}>
-            {busy ? statusMsg || 'Working…' : (hasApiKey ? '✦ Clean & Save →' : 'Save & Extract Cases →')}
+          <button style={tbS.btnPrimary} onClick={() => onSubmit(draftTitle)} disabled={!canSave}>
+            {busy
+              ? statusMsg || 'Working…'
+              : value.trim()
+                ? (hasApiKey ? '✦ Clean & Save →' : 'Save & Extract Cases →')
+                : 'Save Name →'}
           </button>
         </div>
       </div>
@@ -644,7 +636,6 @@ const tbS = {
   customTag: { background: '#FDF3E0', color: '#2A6049', padding: '1px 6px', borderRadius: 3, border: '1px solid #E8D5A0', fontWeight: 600, fontSize: 11 },
   cardBtns: { display: 'flex', gap: 4 },
   iconBtn:  { background: 'none', border: '1px solid #E2D9CC', borderRadius: 4, width: 27, height: 27, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#4A3D30', fontSize: 13 },
-  renameInput: { width: '100%', boxSizing: 'border-box', padding: '6px 10px', borderRadius: 5, border: '1px solid #2A6049', fontSize: 14.5, fontWeight: 700, color: '#1A1714', fontFamily: '"Lora", "Lora", Georgia, serif', background: 'white', outline: 'none' },
   chevron:     { fontSize: 18, color: '#C8A84C', transform: 'rotate(0deg)', transition: 'transform .2s', marginLeft: 2 },
   chevronOpen: { transform: 'rotate(90deg)' },
   cardBody: { padding: '4px 16px 18px 64px', borderTop: '1px solid #F5EFE6' },
@@ -660,8 +651,10 @@ const tbS = {
   statusBar: { marginTop: 10, padding: '8px 12px', background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 6, fontSize: 13, color: '#1E40AF' },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(26,39,68,.52)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(2px)' },
   modal:   { background: '#FFFFFF', borderRadius: 12, width: '90%', maxWidth: 660, boxShadow: '0 24px 64px rgba(26,39,68,.28)', overflow: 'hidden' },
-  modalHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 24px', borderBottom: '1px solid #E2D9CC', background: '#F5EFE6' },
+  modalHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '18px 24px', borderBottom: '1px solid #E2D9CC', background: '#F5EFE6' },
   modalTitle: { fontFamily: '"Lora", "Lora", Georgia, serif', fontSize: 17, fontWeight: 700, color: '#1A1714' },
+  modalTitleInput: { flex: 1, minWidth: 0, fontFamily: '"Lora", "Lora", Georgia, serif', fontSize: 17, fontWeight: 700, color: '#1A1714', background: 'transparent', border: '1px solid transparent', borderRadius: 5, padding: '4px 8px', margin: '-4px -8px', outline: 'none', cursor: 'text', transition: 'background .12s, border-color .12s' },
+  modalTitleInputFocused: { background: 'white', border: '1px solid #2A6049' },
   modalX:     { background: 'none', border: 'none', fontSize: 17, color: '#5A4538', cursor: 'pointer' },
   modalBody:  { padding: '22px 24px' },
   modalDesc:  { fontSize: 13.5, color: '#4A3D30', marginBottom: 14, lineHeight: 1.65, marginTop: 0 },
