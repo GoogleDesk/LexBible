@@ -236,6 +236,7 @@ function QuizTab({ course, onUpdate }) {
     let topicsCataloged = 0;
     let chunkHeader = '';
     let audit = null;       // { uncovered, weak, summary } | null
+    let makeupCount = 0;    // questions added by the post-audit makeup pass
     try {
       newQs = await window.LexStore.generateQuizForChapter({
         content:      ch.content,
@@ -296,6 +297,16 @@ function QuizTab({ course, onUpdate }) {
               ? `Section ${info.chunkIndex + 1}/${info.totalChunks} batch ${info.batchIndex + 1}/${info.totalBatches}`
               : `Batch ${info.batchIndex + 1}/${info.totalBatches}`;
             warnings.push(`${where} skipped: ${info.error}`);
+          } else if (info.phase === 'makeup') {
+            setGenState(prev => ({ ...prev, status: `Filling ${info.topicCount} coverage gap${info.topicCount === 1 ? '' : 's'} across ${info.chunkCount} section${info.chunkCount === 1 ? '' : 's'}…` }));
+          } else if (info.phase === 'makeup-done') {
+            makeupCount = info.questionCount || 0;
+            const msg = makeupCount > 0
+              ? `Makeup pass added ${makeupCount} question${makeupCount === 1 ? '' : 's'} for previously-uncovered topics`
+              : 'Makeup pass produced no additional questions';
+            setGenState(prev => ({ ...prev, status: msg }));
+          } else if (info.phase === 'makeup-warning') {
+            warnings.push(`Makeup batch for section ${info.chunkIndex + 1} failed: ${info.error}`);
           }
         },
         onBatch: (_batch, info) => {
@@ -344,7 +355,7 @@ function QuizTab({ course, onUpdate }) {
       });
 
       setGenState(null);
-      setGenReport({ setId: newSetId, chId: selChapter, factCount, appCount, ccCount, total: final.length, label, warnings, audit });
+      setGenReport({ setId: newSetId, chId: selChapter, factCount, appCount, ccCount, makeupCount, total: final.length, label, warnings, audit });
     } catch (err) {
       setGenState(prev => ({ ...prev, error: err.message || 'Generation failed.' }));
     }
@@ -542,7 +553,7 @@ function QuizTab({ course, onUpdate }) {
           <div style={{ flex:1, minWidth:0 }}>
             <div>
               <span style={qS.genReportTitle}>✓ {genReport.label} generated — {genReport.total} questions</span>
-              <span style={qS.genReportDetail}> · {genReport.factCount} fact-based · {genReport.appCount} application{genReport.ccCount ? ` · ${genReport.ccCount} compare/contrast` : ''}</span>
+              <span style={qS.genReportDetail}> · {genReport.factCount} fact-based · {genReport.appCount} application{genReport.ccCount ? ` · ${genReport.ccCount} compare/contrast` : ''}{genReport.makeupCount ? ` · ${genReport.makeupCount} makeup (filled audit gaps)` : ''}</span>
             </div>
             {genReport.audit && genReport.audit.summary.totalTopics > 0 && (() => {
               const s = genReport.audit.summary;
