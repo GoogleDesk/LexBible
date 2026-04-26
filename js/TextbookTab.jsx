@@ -179,6 +179,24 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
     onUpdate({ chapters: chapters.filter(c => c.id !== chId) });
   }
 
+  function handleRenameChapter(chId, newTitle) {
+    const t = (newTitle || '').trim();
+    if (!t) return;
+    onUpdate({
+      chapters: chapters.map(c => c.id === chId ? { ...c, title: t } : c),
+    });
+  }
+
+  function handleMoveChapter(chId, dir) {
+    const idx = chapters.findIndex(c => c.id === chId);
+    if (idx < 0) return;
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= chapters.length) return;
+    const next = [...chapters];
+    [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+    onUpdate({ chapters: next.map((c, i) => ({ ...c, number: i + 1 })) });
+  }
+
   function openContentModal(chId) {
     const ch = chapters.find(c => c.id === chId);
     setContentText(ch?.content || '');
@@ -230,13 +248,18 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
   return (
     <div style={tbS.root}>
       <div style={tbS.list}>
-        {chapters.map(ch => (
+        {chapters.map((ch, i) => (
           <ChapterCard
             key={ch.id} chapter={ch}
             expanded={expandedChapter === ch.id}
             onExpand={() => setExpandedChapter(expandedChapter === ch.id ? null : ch.id)}
             onAddContent={() => openContentModal(ch.id)}
             onDelete={() => handleDeleteChapter(ch.id)}
+            onRename={(t) => handleRenameChapter(ch.id, t)}
+            onMoveUp={() => handleMoveChapter(ch.id, -1)}
+            onMoveDown={() => handleMoveChapter(ch.id, +1)}
+            canMoveUp={i > 0}
+            canMoveDown={i < chapters.length - 1}
             briefsDone={(ch.cases || []).filter(c => { const b = (course.briefs || {})[c]; return b && (b.facts || b.holding); }).length}
             briefsTotal={(ch.cases || []).length}
             onNavigateToCase={onNavigateToCase}
@@ -287,16 +310,60 @@ function TextbookTab({ course, onUpdate, onRegisterActions, onNavigateToCase }) 
 }
 
 // ── Chapter Card ──────────────────────────────────────────────────────────────
-function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, briefsDone = 0, briefsTotal = 0, onNavigateToCase }) {
+function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, onRename, onMoveUp, onMoveDown, canMoveUp, canMoveDown, briefsDone = 0, briefsTotal = 0, onNavigateToCase }) {
   const hasContent = chapter.contentStatus === 'complete';
   const caseCount  = chapter.cases?.length || 0;
+  const [menuOpen,    setMenuOpen]    = useTBState(false);
+  const [renaming,    setRenaming]    = useTBState(false);
+  const [draftTitle,  setDraftTitle]  = useTBState('');
+  const menuRef = useTBRef(null);
+
+  React.useEffect(() => {
+    if (!menuOpen) return;
+    function handler(e) {
+      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
+
+  function startRename() {
+    setDraftTitle(chapter.title || '');
+    setRenaming(true);
+    setMenuOpen(false);
+  }
+  function commitRename() {
+    const t = draftTitle.trim();
+    if (t && t !== chapter.title) onRename?.(t);
+    setRenaming(false);
+  }
+  function cancelRename() {
+    setRenaming(false);
+    setDraftTitle('');
+  }
 
   return (
     <div style={{ ...tbS.card, ...(expanded ? tbS.cardOpen : {}) }}>
-      <div style={tbS.cardHeader} onClick={onExpand}>
+      <div style={tbS.cardHeader} onClick={renaming ? undefined : onExpand}>
         <div style={tbS.chNum}>{chapter.number}</div>
         <div style={tbS.cardInfo}>
-          <div style={tbS.cardTitle}>{fmtTitle(chapter.title)}</div>
+          {renaming ? (
+            <input
+              style={tbS.renameInput}
+              value={draftTitle}
+              onChange={e => setDraftTitle(e.target.value)}
+              onClick={e => e.stopPropagation()}
+              onKeyDown={e => {
+                e.stopPropagation();
+                if (e.key === 'Enter')  commitRename();
+                if (e.key === 'Escape') cancelRename();
+              }}
+              onBlur={commitRename}
+              autoFocus
+            />
+          ) : (
+            <div style={tbS.cardTitle}>{fmtTitle(chapter.title)}</div>
+          )}
           <div style={tbS.cardMeta}>
             {chapter.isCustom && <span style={tbS.customTag}>Custom</span>}
             {hasContent && briefsTotal > 0
@@ -311,6 +378,38 @@ function ChapterCard({ chapter, expanded, onExpand, onAddContent, onDelete, brie
           <button style={tbS.iconBtn} onClick={onAddContent} title={hasContent ? 'Edit content' : 'Add content'}>
             {hasContent ? '✎' : '+'}
           </button>
+          <div ref={menuRef} style={tbS.menuWrap}>
+            <button
+              style={{ ...tbS.iconBtn, ...(menuOpen ? tbS.iconBtnActive : {}) }}
+              onClick={() => setMenuOpen(o => !o)}
+              title="More actions"
+              aria-label="More actions"
+              aria-expanded={menuOpen}
+            >⋮</button>
+            {menuOpen && (
+              <div style={tbS.menuPopover} role="menu">
+                <button style={tbS.menuItem} onClick={startRename} role="menuitem">
+                  <span style={tbS.menuIcon}>✎</span> Rename
+                </button>
+                <button
+                  style={{ ...tbS.menuItem, ...(canMoveUp ? {} : tbS.menuItemDisabled) }}
+                  onClick={() => { if (canMoveUp) { onMoveUp?.(); setMenuOpen(false); } }}
+                  disabled={!canMoveUp}
+                  role="menuitem"
+                >
+                  <span style={tbS.menuIcon}>↑</span> Move up
+                </button>
+                <button
+                  style={{ ...tbS.menuItem, ...(canMoveDown ? {} : tbS.menuItemDisabled) }}
+                  onClick={() => { if (canMoveDown) { onMoveDown?.(); setMenuOpen(false); } }}
+                  disabled={!canMoveDown}
+                  role="menuitem"
+                >
+                  <span style={tbS.menuIcon}>↓</span> Move down
+                </button>
+              </div>
+            )}
+          </div>
           <button style={{ ...tbS.iconBtn, color: '#C0392B' }} onClick={onDelete} title="Delete chapter">✕</button>
         </div>
         <span style={{ ...tbS.chevron, ...(expanded ? tbS.chevronOpen : {}) }}>›</span>
@@ -551,6 +650,13 @@ const tbS = {
   customTag: { background: '#FDF3E0', color: '#2A6049', padding: '1px 6px', borderRadius: 3, border: '1px solid #E8D5A0', fontWeight: 600, fontSize: 11 },
   cardBtns: { display: 'flex', gap: 4 },
   iconBtn:  { background: 'none', border: '1px solid #E2D9CC', borderRadius: 4, width: 27, height: 27, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#4A3D30', fontSize: 13 },
+  iconBtnActive: { background: '#F5EFE6', borderColor: '#C8BEA8' },
+  menuWrap: { position: 'relative', display: 'inline-block' },
+  menuPopover: { position: 'absolute', right: 0, top: 'calc(100% + 4px)', background: 'white', border: '1px solid #E2D9CC', borderRadius: 6, boxShadow: '0 8px 24px rgba(26,39,68,.14)', minWidth: 150, zIndex: 50, overflow: 'hidden', padding: 4 },
+  menuItem: { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px', background: 'none', border: 'none', borderRadius: 4, textAlign: 'left', fontSize: 13, color: '#1A1714', cursor: 'pointer', fontFamily: 'inherit' },
+  menuItemDisabled: { color: '#C8BEA8', cursor: 'not-allowed' },
+  menuIcon: { display: 'inline-block', width: 14, textAlign: 'center', fontSize: 12 },
+  renameInput: { width: '100%', boxSizing: 'border-box', padding: '6px 10px', borderRadius: 5, border: '1px solid #2A6049', fontSize: 14.5, fontWeight: 700, color: '#1A1714', fontFamily: '"Lora", "Lora", Georgia, serif', background: 'white', outline: 'none' },
   chevron:     { fontSize: 18, color: '#C8A84C', transform: 'rotate(0deg)', transition: 'transform .2s', marginLeft: 2 },
   chevronOpen: { transform: 'rotate(90deg)' },
   cardBody: { padding: '4px 16px 18px 64px', borderTop: '1px solid #F5EFE6' },
