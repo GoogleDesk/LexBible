@@ -612,20 +612,28 @@ function QuizTab({ course, onUpdate }) {
                   <>
                     {chData.sets.map((set) => {
                   const lastSess    = set.sessions?.slice(-1)[0];
-                  const lastPct     = lastSess ? Math.round(lastSess.score / lastSess.total * 100) : null;
                   const wrongCount  = Object.keys(set.wrongBank || {}).length;
                   const flagCount   = (set.flagged || []).length;
-                  const inProgress  = set.progress && Object.keys(set.progress.answers || {}).length > 0 && !set.sessions?.length;
                   const resumeIdx   = set.progress?.idx || 0;
                   const resumeCount = Object.keys(set.progress?.answers || {}).length;
+                  const totalQs     = set.questions.length;
+                  const allAnswered = totalQs > 0 && resumeCount === totalQs;
 
                   const typeLabel = set.settings?.type === 'fact' ? 'fact-based' : set.settings?.type === 'application' ? 'application' : 'mixed';
-                  const isDone = set.sessions?.length > 0;
+                  // Treat as done if explicitly finished OR every question has an answer.
+                  const isDone     = (set.sessions?.length > 0) || allAnswered;
+                  const inProgress = !isDone && resumeCount > 0;
+                  const displayPct = lastSess
+                    ? Math.round(lastSess.score / lastSess.total * 100)
+                    : (allAnswered && totalQs > 0
+                        ? Math.round(((set.progress?.score) ?? 0) / totalQs * 100)
+                        : null);
+
                   const metaText = isDone
-                    ? `${lastPct}% · ${set.questions.length} questions · ${typeLabel}`
+                    ? `${displayPct ?? 0}% · ${totalQs} questions · ${typeLabel}`
                     : inProgress
-                      ? `${resumeCount}/${set.questions.length} answered · ${typeLabel}`
-                      : `${set.questions.length} questions · ${typeLabel}`;
+                      ? `${resumeCount}/${totalQs} answered · ${typeLabel}`
+                      : `${totalQs} questions · ${typeLabel}`;
 
                   return (
                     <div key={set.id} style={qS.setRow}>
