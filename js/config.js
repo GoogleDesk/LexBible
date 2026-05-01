@@ -10,6 +10,6 @@
 // ensure each signed-in user can only read and write their own row.
 
 window.LEXBIBLE_CONFIG = {
-  SUPABASE_URL:      'https://dgmsvlqjdmsuvoqtzwwq.supabase.co',
-  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRnbXN2bHFqZG1zdXZvcXR6d3dxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcwMjEzNzUsImV4cCI6MjA5MjU5NzM3NX0.XKGwnjBEceKMRuhjXWa_6ar7JYw1p6Z9c4QXshCH_Qg',
+  SUPABASE_URL:      'https://kgcxwxkvycazzifvoufg.supabase.co',
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtnY3h3eGt2eWNhenppZnZvdWZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2Njg5MDIsImV4cCI6MjA5MzI0NDkwMn0.vVplzVDmVI88thHqJ46NlZZiGYrHhR4s9ojnJqPaGWg',
 };
