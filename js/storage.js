@@ -1,6 +1,6 @@
-// LexBrother — Data Layer v4 (Supabase-backed, in-memory cache + debounced sync)
-const STORAGE_KEY = 'lexbrother_v1';     // legacy localStorage key — migrated to cloud on first sign-in
-const APIKEY_KEY  = 'lexbrother_apikey'; // legacy localStorage key — migrated to cloud on first sign-in
+// LexBible — Data Layer v4 (Supabase-backed, in-memory cache + debounced sync)
+const STORAGE_KEY = 'lexbible_v1';     // legacy localStorage key — migrated to cloud on first sign-in
+const APIKEY_KEY  = 'lexbible_apikey'; // legacy localStorage key — migrated to cloud on first sign-in
 
 const DEFAULT_COURSES = [
   { id: 'civil-procedure',        name: 'Civil Procedure',         abbr: 'CivPro'  },
@@ -123,7 +123,7 @@ async function flushSave() {
       .from('user_data')
       .update({ data: cloud.data, api_key: cloud.apiKey, updated_at: new Date().toISOString() })
       .eq('user_id', cloud.userId);
-    if (error) console.warn('LexBrother: cloud save error', error);
+    if (error) console.warn('LexBible: cloud save error', error);
   } finally {
     cloud.saving = false;
     if (cloud.pending) { cloud.pending = false; scheduleSave(); }
@@ -1548,7 +1548,7 @@ async function readBriefFile(file) {
 
   const text = await file.text();
 
-  // LexBrother exports .doc as Word-HTML, so detect and strip
+  // LexBible exports .doc as Word-HTML, so detect and strip
   if (name.endsWith('.doc') || /<html|<body|<p[\s>]/i.test(text)) {
     const tmp = document.createElement('div');
     tmp.innerHTML = text;

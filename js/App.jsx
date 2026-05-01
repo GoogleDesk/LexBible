@@ -6,7 +6,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{"sidebarWidth":"232","accentColor":"#2
 // ── Supabase singleton (created once per page load) ──────────────────────────
 function getSupabaseClient() {
   if (window.__lexSupabase) return window.__lexSupabase;
-  const cfg = window.LEXBROTHER_CONFIG || {};
+  const cfg = window.LEXBIBLE_CONFIG || {};
   if (!cfg.SUPABASE_URL || cfg.SUPABASE_URL.startsWith('PASTE_') ||
       !cfg.SUPABASE_ANON_KEY || cfg.SUPABASE_ANON_KEY.startsWith('PASTE_')) {
     return null;
