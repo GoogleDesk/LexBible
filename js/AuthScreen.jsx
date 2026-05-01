@@ -5,7 +5,7 @@ function ConfigMissingScreen() {
   return (
     <div style={aS.root}>
       <div style={aS.card}>
-        <div style={aS.brand}>LexBrother</div>
+        <div style={aS.brand}>LexBible</div>
         <h2 style={aS.headline}>Cloud storage not configured</h2>
         <p style={aS.copy}>
           Open <code style={aS.code}>js/config.js</code> and fill in your Supabase
@@ -80,7 +80,7 @@ function AuthScreen({ supabase }) {
   return (
     <div style={aS.root}>
       <div style={aS.card}>
-        <div style={aS.brand}>LexBrother</div>
+        <div style={aS.brand}>LexBible</div>
 
         {phase === 'sent' ? (
           <>
@@ -89,14 +89,14 @@ function AuthScreen({ supabase }) {
               We sent a sign-in link to
               <div style={aS.sentEmail}>{cleanEmail}</div>
               Click the link to finish signing in. You can close this tab —
-              the link opens LexBrother directly.
+              the link opens LexBible directly.
             </div>
           </>
         ) : phase === 'not-allowed' ? (
           <>
             <h2 style={aS.headline}>Not currently accepting new users</h2>
             <p style={aS.copy}>
-              LexBrother is invite-only right now. If you're interested, we
+              LexBible is invite-only right now. If you're interested, we
               can add <strong>{cleanEmail}</strong> to the waitlist and email
               you when access opens up.
             </p>

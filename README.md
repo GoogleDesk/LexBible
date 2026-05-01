@@ -1,4 +1,4 @@
-# LexBrother
+# LexBible
 
 A personal law school companion. Paste e-textbook content into a per-course workspace, generate rigorous multiple-choice quizzes via the Claude API, and write case briefs that export to a clean Word document.
 
@@ -37,8 +37,8 @@ This is a one-time setup. After this, you sign in with an email link on each dev
 1. Go to **https://supabase.com** and click **Start your project** (or **Sign in**). Sign up with GitHub or email.
 2. Once signed in, click **New project**.
 3. Fill in:
-   - **Name:** `lexbrother` (or anything)
-   - **Database password:** click the generator button, then save the password somewhere safe (you won't need it for LexBrother, but Supabase requires one)
+   - **Name:** `lexbible` (or anything)
+   - **Database password:** click the generator button, then save the password somewhere safe (you won't need it for LexBible, but Supabase requires one)
    - **Region:** pick whichever is closest to you
 4. Click **Create new project**. Wait ~2 minutes for it to provision.
 
@@ -171,7 +171,7 @@ You should see "Success. No rows returned." That's correct — the table is empt
 Supabase needs to know which URL the sign-in email should send users back to.
 
 1. Left sidebar → **Authentication** → **URL Configuration**.
-2. Under **Site URL**, paste your Cloudflare Pages URL (e.g. `https://lexbrother.pages.dev` or your custom domain). If you don't have one yet, use `http://localhost:8080` for now and update this later.
+2. Under **Site URL**, paste your Cloudflare Pages URL (e.g. `https://lexbible.pages.dev` or your custom domain). If you don't have one yet, use `http://localhost:8080` for now and update this later.
 3. Under **Redirect URLs**, click **Add URL** and add both of the following (add whichever you'll actually use):
    - `http://localhost:8080` — for local testing
    - `https://your-site.pages.dev` — for the deployed site
@@ -179,15 +179,15 @@ Supabase needs to know which URL the sign-in email should send users back to.
 
 > Note: Supabase ships with email auth enabled by default, so there's no toggle to flip. If you ever want to disable it, it's under **Authentication → Providers**.
 
-### 4. Paste your Supabase URL and anon key into LexBrother
+### 4. Paste your Supabase URL and anon key into LexBible
 
 1. In the Supabase dashboard, left sidebar → **Project Settings** (gear icon) → **API**.
 2. Copy the **Project URL** (looks like `https://abcdefghijklm.supabase.co`).
 3. Copy the **anon public** API key (a long string starting with `eyJ…`). **Not** the service_role key.
-4. Open `js/config.js` in LexBrother and paste the two values:
+4. Open `js/config.js` in LexBible and paste the two values:
 
 ```js
-window.LEXBROTHER_CONFIG = {
+window.LEXBIBLE_CONFIG = {
   SUPABASE_URL:      'https://abcdefghijklm.supabase.co',
   SUPABASE_ANON_KEY: 'eyJhbGciOi...(long string)...',
 };
@@ -203,7 +203,7 @@ Open your site. Enter your email. Click the link in your inbox. Done — your da
 
 ### 6. (Optional) Customize the magic-link email
 
-By default, Supabase sends a plain "Confirm your email" template. To make it say LexBrother:
+By default, Supabase sends a plain "Confirm your email" template. To make it say LexBible:
 
 1. Dashboard → **Authentication** → **Email Templates** → **Magic Link**.
 2. Customize the subject and body. Save.
@@ -226,7 +226,7 @@ Make sure `http://localhost:8080` is in your Supabase redirect URL list (step 3 
 
 1. Push this repo to GitHub.
 2. Go to **Cloudflare Dashboard → Workers & Pages → Create → Pages → Connect to Git**.
-3. Select the `LexBrother` repo.
+3. Select the `LexBible` repo.
 4. On the build config screen, **leave the framework preset as "None"** and **leave the build command empty**. Set the **build output directory** to `/` (the repo root).
 5. Click Save and Deploy.
 
@@ -236,7 +236,7 @@ Every future `git push` to the main branch triggers an auto-deploy. No environme
 
 1. Go to https://console.anthropic.com, create an account, add a credit card (minimum $5).
 2. **Settings → API Keys → Create Key.** Copy it (starts with `sk-ant-…`).
-3. In LexBrother, click the **⚙** icon at the bottom-left of the sidebar. Paste your key, hit Save.
+3. In LexBible, click the **⚙** icon at the bottom-left of the sidebar. Paste your key, hit Save.
 4. The key is stored in your Supabase row, so it's available on every device you sign in on. It's sent directly from your browser to Anthropic on every request and never logged anywhere else.
 
 Without a key, the app falls back to a built-in quota (rate-limited and capped at 30 questions per quiz). With a key, you get up to 500 questions and full TOC cleanup on Claude Opus 4.7.

@@ -1,4 +1,4 @@
-// LexBrother — URL routing helpers
+// LexBible — URL routing helpers
 //
 // URL shape:
 //   /                            → default course, default tab
